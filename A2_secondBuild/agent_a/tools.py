@@ -304,6 +304,20 @@ def issue_decision_letter(case_id: str, decision: str, reason: str, evidence: li
 
 
 # ---------------------------------------------------------------------------
+"""
+Builds the tool-documentation text handed to a live model's system prompt,
+straight from each tool's own docstring -- the descriptor contract IS the
+manual, so there is exactly one place these six fields are written.
+"""
+def build_tool_docs() -> str:
+    import inspect
+    parts = []
+    for name, fn in TOOL_REGISTRY.items():
+        doc = inspect.getdoc(fn) or ""
+        parts.append(doc.strip())
+    return "\n\n".join(parts)
+
+
 TOOL_REGISTRY = {
     "get_claim": get_claim,
     "lookup_policy": lookup_policy,
