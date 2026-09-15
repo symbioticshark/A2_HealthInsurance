@@ -48,10 +48,5 @@
     "code": "80053",
     "description": "Comprehensive metabolic panel",
     "requires_preauth": false
-  },
-  {
-    "code": "0402T",
-    "description": "Experimental gene therapy infusion",
-    "requires_preauth": false
   }
 ]

@@ -188,9 +188,19 @@ def get_preauthorisation(member_id: str, procedure_code: str, date_of_service: s
         return {"found": False, "preauth_id": None, "valid_from": None, "valid_to": None,
                 "currently_valid": False, "note": note}
 
-    rec = exact[0]
     d = _date(date_of_service)
-    valid = _date(rec["valid_from"]) <= d <= _date(rec["valid_to"])
+    # A member can genuinely have more than one preauth record for the same
+    # procedure over time (e.g. an old expired one and a freshly re-issued
+    # one) -- picking exact[0] unconditionally means list ORDER, not the
+    # actual date, decides the outcome. Check every matching record for one
+    # that is actually valid on this date; only if none are, fall back to
+    # the most recently-issued record (highest valid_to) so the "expired"
+    # message is at least the most relevant one, not an arbitrary older hit.
+    valid_matches = [r for r in exact if _date(r["valid_from"]) <= d <= _date(r["valid_to"])]
+    if valid_matches:
+        rec, valid = valid_matches[0], True
+    else:
+        rec, valid = max(exact, key=lambda r: r["valid_to"]), False
     note = "valid on this date" if valid else f"record found but expired/not yet valid for {date_of_service}"
     return {"found": True, "preauth_id": rec["preauth_id"], "valid_from": rec["valid_from"],
             "valid_to": rec["valid_to"], "currently_valid": valid, "note": note}
