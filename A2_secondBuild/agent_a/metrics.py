@@ -49,6 +49,7 @@ MODEL_PRICES = {
     "anthropic/claude-3-5-haiku": (0.80, 4.00),
     "anthropic/claude-3-haiku":   (0.25, 1.25),
     "openai/gpt-4o-mini":         (0.15, 0.60),
+    "google/gemini-2.5-flash":    (0.30, 2.50),
     # add your D5(b) battery's models here, with real numbers, before
     # trusting the $/task figures in your report.
 }
