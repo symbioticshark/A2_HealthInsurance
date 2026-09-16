@@ -279,8 +279,6 @@ def _run_case_live(claim_id: str, autonomy: str, auto_confirm: bool, model: str,
     result = RunResult(case_id=claim_id, autonomy=autonomy, model=model, cost_is_measured=True)
     already_called = set()
     turn = 0
-    format_corrections = 0
-    max_format_corrections = 2
 
     system_prompt = L.build_system_prompt(T.build_tool_docs())
     messages = [
@@ -313,12 +311,39 @@ def _run_case_live(claim_id: str, autonomy: str, auto_confirm: bool, model: str,
         result.evidence.append(name)
         return out
 
+    def invalidate(trigger, detail):
+        """Record an invalid trial without turning it into an escalation."""
+        result.decision = None
+        result.trigger = trigger
+        result.guardrail_stop = trigger
+        result.turns = turn
+        result.trace.append(f"turn {turn}: INVALID MODEL OUTPUT -- {trigger}: {detail}")
+        return result
+
     try:
         while True:
             turn += 1
             G.check_step_cap(turn)
 
-            text, usage = L.call_model(messages, model=model)
+            try:
+                text, usage = L.call_model(messages, model=model)
+            except Exception as exc:
+                # Keep every successfully reported charge from earlier turns.
+                # The failed/timed-out request itself may still be billed, so
+                # the accumulated value is explicitly labelled as partial.
+                timed_out = L.is_timeout_error(exc)
+                trigger = "request_timeout" if timed_out else "request_error"
+                result.decision = None
+                result.trigger = trigger
+                result.guardrail_stop = trigger
+                result.turns = turn
+                result.cost_is_measured = False
+                result.cost_source = f"partial_known_cost_unknown_{'timeout' if timed_out else 'error'}"
+                result.trace.append(
+                    f"turn {turn}: {trigger} -- {type(exc).__name__}: {exc}; "
+                    "the current request cost is unknown and no automatic retry was made"
+                )
+                return result
             result.tokens_in += usage["input_tokens"]
             result.tokens_out += usage["output_tokens"]
             result.cached_input_tokens += usage.get("cached_input_tokens", 0)
@@ -352,23 +377,7 @@ def _run_case_live(claim_id: str, autonomy: str, auto_confirm: bool, model: str,
             try:
                 calls = L.parse_actions(text)
             except ValueError as exc:
-                format_corrections += 1
-                result.trace.append(
-                    f"turn {turn}: malformed Action output; requested correction "
-                    f"({format_corrections}/{max_format_corrections})"
-                )
-                if format_corrections > max_format_corrections:
-                    raise G.GuardrailStop("malformed_model_output", str(exc))
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "FORMAT ERROR: Your Action was not parseable. Reply again using exactly "
-                        "Action: tool_name({\"arg\": \"value\"}) or exactly Final: followed "
-                        "by one JSON object. Do not use Action: None and do not repeat any tool "
-                        "call that already received an Observation."
-                    ),
-                })
-                continue
+                return invalidate("malformed_model_output", f"unparseable Action: {exc}")
             if calls:
                 _record_calls(result, calls, already_called)
                 observations = []
@@ -383,22 +392,7 @@ def _run_case_live(claim_id: str, autonomy: str, auto_confirm: bool, model: str,
             try:
                 final = L.parse_final(text)
             except ValueError as exc:
-                format_corrections += 1
-                result.trace.append(
-                    f"turn {turn}: malformed Final output; requested correction "
-                    f"({format_corrections}/{max_format_corrections})"
-                )
-                if format_corrections > max_format_corrections:
-                    raise G.GuardrailStop("malformed_model_output", str(exc))
-                correction = (
-                    "FORMAT ERROR: Final must be followed by exactly one valid JSON object with "
-                    "decision, trigger, missing, approved_total, and refused_total. Return only "
-                    "the corrected Final; do not repeat any earlier tool calls."
-                )
-                if calls:
-                    correction = "\n".join(observations + [correction])
-                messages.append({"role": "user", "content": correction})
-                continue
+                return invalidate("malformed_model_output", f"unparseable Final: {exc}")
             if final is not None:
                 decision = final.get("decision")
                 if decision not in ("approve_in_principle", "request_document", "escalate"):
@@ -421,29 +415,14 @@ def _run_case_live(claim_id: str, autonomy: str, auto_confirm: bool, model: str,
                 return result
 
             if not calls:
-                format_corrections += 1
-                result.trace.append(
-                    f"turn {turn}: model produced neither Action nor Final; requested correction "
-                    f"({format_corrections}/{max_format_corrections})"
+                return invalidate(
+                    "no_action_no_final", "model produced neither a parseable Action nor Final"
                 )
-                if format_corrections > max_format_corrections:
-                    raise G.GuardrailStop(
-                        "no_action_no_final", "model repeatedly produced no parseable Action or Final"
-                    )
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "FORMAT ERROR: Reply with at least one parseable Action: tool_name({...}) "
-                        "or one Final: {...} JSON object. If the previous Final was empty, return "
-                        "the complete Final object now."
-                    ),
-                })
-                continue
 
             messages.append({"role": "user", "content": "\n".join(observations)})
 
     except G.GuardrailStop as gs:
-        result.decision = "escalate"
+        result.decision = None if gs.trigger == "invalid_decision" else "escalate"
         result.trigger = gs.trigger
         result.guardrail_stop = gs.trigger
         result.turns = turn

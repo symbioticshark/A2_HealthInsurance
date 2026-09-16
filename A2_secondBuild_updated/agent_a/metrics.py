@@ -585,6 +585,11 @@ def build_key_result(rows: list, session: SessionSummary, app_version: str,
     expected_by_case = {
         row["case_id"]: row.get("expected_decision") for row in rows
     }
+    has_unknown_request_cost = any(
+        str(row.get("cost_source", "")).startswith("partial_")
+        or row.get("cost_source") == "unavailable"
+        for row in rows
+    )
     for row in rows:
         compact = {
             "case_id": row["case_id"],
@@ -637,6 +642,11 @@ def build_key_result(rows: list, session: SessionSummary, app_version: str,
         "fallback_cost_runs": sum(
             1 for row in rows if row.get("cost_source") == "token_price_fallback"
         ),
+        "partial_or_unavailable_cost_runs": sum(
+            1 for row in rows
+            if str(row.get("cost_source", "")).startswith("partial_")
+            or row.get("cost_source") == "unavailable"
+        ),
         "approve_count": sum(1 for row in rows if row.get("decision") == "approve_in_principle"),
         "request_document_count": sum(1 for row in rows if row.get("decision") == "request_document"),
         "escalate_count": sum(1 for row in rows if row.get("decision") == "escalate"),
@@ -673,7 +683,8 @@ def build_key_result(rows: list, session: SessionSummary, app_version: str,
         "trials_per_case": session.trials_per_case,
         "trial_plan": session.trial_plan,
         "cost_basis": (
-            "openrouter_usage" if session.backend == "live" and session.cost_is_measured
+            "partial_or_unavailable" if session.backend == "live" and has_unknown_request_cost
+            else "openrouter_usage" if session.backend == "live" and session.cost_is_measured
             else "token_price_fallback" if session.backend == "live"
             else "scripted_estimate"
         ),

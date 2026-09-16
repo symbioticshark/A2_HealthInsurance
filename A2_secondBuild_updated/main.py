@@ -357,7 +357,12 @@ def _run_live(cases, trials, run_mode, trial_counts=None):
         if before.get("available") and after.get("available"):
             print(f"Observed balance change: ${before['balance'] - after['balance']:.5f}")
         cost_basis = saved_result["environment"].get("cost_basis")
-        cost_label = "OpenRouter-reported run cost" if cost_basis == "openrouter_usage" else "Fallback calculated run cost"
+        if cost_basis == "openrouter_usage":
+            cost_label = "OpenRouter-reported run cost"
+        elif cost_basis == "partial_or_unavailable":
+            cost_label = "Known partial run cost (one or more request costs unavailable)"
+        else:
+            cost_label = "Fallback calculated run cost"
         print(f"{cost_label}: ${result['session']['total_cost_usd']:.5f}")
         difference = saved_result["environment"].get("cost_reconciliation_difference_usd")
         if difference is not None:
