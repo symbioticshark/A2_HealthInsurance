@@ -279,6 +279,8 @@ def _run_case_live(claim_id: str, autonomy: str, auto_confirm: bool, model: str,
     result = RunResult(case_id=claim_id, autonomy=autonomy, model=model, cost_is_measured=True)
     already_called = set()
     turn = 0
+    format_corrections = 0
+    max_format_corrections = 2
 
     system_prompt = L.build_system_prompt(T.build_tool_docs())
     messages = [
@@ -347,7 +349,26 @@ def _run_case_live(claim_id: str, autonomy: str, auto_confirm: bool, model: str,
             # sitting right there in the same message, and force-escalated
             # every case that concluded this way. Executing first means the
             # gate check below sees the real, current evidence.
-            calls = L.parse_actions(text)
+            try:
+                calls = L.parse_actions(text)
+            except ValueError as exc:
+                format_corrections += 1
+                result.trace.append(
+                    f"turn {turn}: malformed Action output; requested correction "
+                    f"({format_corrections}/{max_format_corrections})"
+                )
+                if format_corrections > max_format_corrections:
+                    raise G.GuardrailStop("malformed_model_output", str(exc))
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "FORMAT ERROR: Your Action was not parseable. Reply again using exactly "
+                        "Action: tool_name({\"arg\": \"value\"}) or exactly Final: followed "
+                        "by one JSON object. Do not use Action: None and do not repeat any tool "
+                        "call that already received an Observation."
+                    ),
+                })
+                continue
             if calls:
                 _record_calls(result, calls, already_called)
                 observations = []
@@ -359,7 +380,25 @@ def _run_case_live(claim_id: str, autonomy: str, auto_confirm: bool, model: str,
                     observations.append(f"Observation ({name}): {out}")
                 result.trace.append(f"turn {turn}: {len(calls)} call(s) -- {[c[0] for c in calls]}")
 
-            final = L.parse_final(text)
+            try:
+                final = L.parse_final(text)
+            except ValueError as exc:
+                format_corrections += 1
+                result.trace.append(
+                    f"turn {turn}: malformed Final output; requested correction "
+                    f"({format_corrections}/{max_format_corrections})"
+                )
+                if format_corrections > max_format_corrections:
+                    raise G.GuardrailStop("malformed_model_output", str(exc))
+                correction = (
+                    "FORMAT ERROR: Final must be followed by exactly one valid JSON object with "
+                    "decision, trigger, missing, approved_total, and refused_total. Return only "
+                    "the corrected Final; do not repeat any earlier tool calls."
+                )
+                if calls:
+                    correction = "\n".join(observations + [correction])
+                messages.append({"role": "user", "content": correction})
+                continue
             if final is not None:
                 decision = final.get("decision")
                 if decision not in ("approve_in_principle", "request_document", "escalate"):
@@ -382,8 +421,24 @@ def _run_case_live(claim_id: str, autonomy: str, auto_confirm: bool, model: str,
                 return result
 
             if not calls:
-                result.trace.append(f"turn {turn}: model produced neither Action nor Final -- treating as a stall")
-                raise G.GuardrailStop("no_action_no_final", "model turn had no parseable Action or Final")
+                format_corrections += 1
+                result.trace.append(
+                    f"turn {turn}: model produced neither Action nor Final; requested correction "
+                    f"({format_corrections}/{max_format_corrections})"
+                )
+                if format_corrections > max_format_corrections:
+                    raise G.GuardrailStop(
+                        "no_action_no_final", "model repeatedly produced no parseable Action or Final"
+                    )
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "FORMAT ERROR: Reply with at least one parseable Action: tool_name({...}) "
+                        "or one Final: {...} JSON object. If the previous Final was empty, return "
+                        "the complete Final object now."
+                    ),
+                })
+                continue
 
             messages.append({"role": "user", "content": "\n".join(observations)})
 
