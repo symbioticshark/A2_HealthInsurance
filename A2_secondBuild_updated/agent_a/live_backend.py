@@ -210,6 +210,10 @@ def call_model(messages: list, model: str = None, reasoning: dict = None):
         "model": model or config.MODEL,
         "messages": messages,
         "max_tokens": 1000,
+        # This task is rule-based.  A zero temperature cannot make every
+        # provider perfectly deterministic, but it removes avoidable sampling
+        # variance and materially improves repeatability between trials.
+        "temperature": 0,
     }
     if reasoning:
         body["reasoning"] = reasoning
@@ -354,6 +358,12 @@ def parse_actions(text: str):
             raise ValueError(f"Action: {name} had no matching closing parenthesis. Raw model output:\n{text}")
 
         arg_str = text[paren_open_pos:i - 1].strip()
+        # Some models emit a prose sentinel immediately before a valid Final,
+        # e.g. `Action: None (no further actions needed)`.  It is not a tool
+        # call and must not prevent the Final object from being consumed.
+        if name.lower() in {"none", "null", "no_action"}:
+            pos = i
+            continue
         try:
             kwargs = _extract_json(arg_str) if arg_str else {}
         except ValueError as e:
@@ -373,6 +383,11 @@ def parse_final(text: str):
     if idx == -1:
         return None
     rest = text[idx + len("Final:"):]
+    # `Final:` is occasionally emitted as a heading before the model has
+    # actually supplied the object.  Treat that as an incomplete turn so the
+    # loop can ask for the object again instead of crashing the whole battery.
+    if not rest.strip():
+        return None
     try:
         return _extract_json(rest)
     except ValueError as e:
