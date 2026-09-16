@@ -61,8 +61,10 @@ def get_claim(claim_id: str) -> dict:
                     and amount.
     INPUT           claim_id: str. An id not in the queue raises ToolError
                     rather than returning an empty/partial record.
-    RETURNS         One record, all fields, all line items. At most ~6 lines
-                    in practice, so no size bound is enforced.
+    RETURNS         One record, all fields, all line items.
+                    SIZE BOUND: at most ~6 line items in practice, under
+                    ~80 tokens total -- bounded by the fixture data itself,
+                    not enforced in code.
     FAILS WHEN      claim_id is not a known claim.
     IRREVERSIBLE?   No. Read-only.
     """
@@ -173,6 +175,7 @@ def get_preauthorisation(member_id: str, procedure_code: str, date_of_service: s
                      note}. `found` distinguishes "no record at all" from
                     "record exists but for a different procedure" (both are
                     also reported in `note`) from "record exists, expired".
+                    SIZE BOUND: one record, 6 fields, under 30 tokens.
     FAILS WHEN      procedure_code not in the catalog -> ProcedureNotFoundError.
     IRREVERSIBLE?   No. Read-only.
     """
@@ -217,6 +220,7 @@ def get_hospital_status(hospital_id: str) -> dict:
                     never changes the decision itself.
     INPUT           hospital_id: str. Unknown id raises ToolError.
     RETURNS         {hospital_id, name, panel, country} -- one record.
+                    SIZE BOUND: one record, 4 fields, under 15 tokens.
     FAILS WHEN      hospital_id is not a known hospital.
     IRREVERSIBLE?   No. Read-only.
     """

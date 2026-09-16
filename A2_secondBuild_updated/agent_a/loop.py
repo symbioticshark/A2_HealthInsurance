@@ -83,16 +83,24 @@ def _record_calls(result: RunResult, calls, already_called: set):
 
 
 def run_case(claim_id: str, autonomy: str = G.AUTONOMY_SETTING, auto_confirm: bool = True,
-             backend: str = None, model: str = None, verbose: bool = False) -> RunResult:
+             backend: str = None, model: str = None, verbose: bool = False,
+             parallel: bool = True) -> RunResult:
     """Runs ONE trial of ONE case, start to finish, from a clean state (D4
     isolation -- nothing here reads any other run's output). Dispatches to
-    the scripted or live path based on `backend` (defaults to config.BACKEND)."""
+    the scripted or live path based on `backend` (defaults to config.BACKEND).
+
+    `parallel` is D2(c)'s measured comparison, scripted backend only: True
+    (default, unchanged behaviour) batches Turn 2's independent calls (and
+    Turn 3's preauth chase) into one turn each. False spreads the exact
+    same calls, in the exact same order, one call per turn -- so it is the
+    "sequential" reading of the same dependency rule, not a different
+    agent. See measure_parallel_vs_sequential.py."""
     backend = backend or config.BACKEND
     t_start = time.perf_counter()
     if backend == "live":
         result = _run_case_live(claim_id, autonomy, auto_confirm, model or config.MODEL, verbose)
     else:
-        result = _run_case_scripted(claim_id, autonomy, auto_confirm, verbose)
+        result = _run_case_scripted(claim_id, autonomy, auto_confirm, verbose, parallel=parallel)
     # Single source of truth for wall clock: the whole run, API latency and
     # tool/guardrail overhead together -- not just the sum of individual
     # API call latencies, which undercounts the loop's own cost.
@@ -103,7 +111,8 @@ def run_case(claim_id: str, autonomy: str = G.AUTONOMY_SETTING, auto_confirm: bo
 # ===========================================================================
 # SCRIPTED PATH -- deterministic, no network, D5(a)
 # ===========================================================================
-def _run_case_scripted(claim_id: str, autonomy: str, auto_confirm: bool, verbose: bool) -> RunResult:
+def _run_case_scripted(claim_id: str, autonomy: str, auto_confirm: bool, verbose: bool,
+                        parallel: bool = True) -> RunResult:
     result = RunResult(case_id=claim_id, autonomy=autonomy, model="scripted", cost_is_measured=False)
     already_called = set()
     turn = 0
@@ -120,6 +129,32 @@ def _run_case_scripted(claim_id: str, autonomy: str, auto_confirm: bool, verbose
             out = {"error": str(e)}
         result.evidence.append(name)
         return out
+
+    def execute_batch(calls, batch_label, on_result=None):
+        """D2(c): the ONLY place turn accounting differs between the two
+        modes. `calls` is always the same list, in the same order, from
+        the same dependency rule (plan_turn2 / plan_turn3_preauth_calls) --
+        parallel=True runs it as one turn, parallel=False spreads it one
+        call per turn. Nothing about WHICH calls happen or in what order
+        changes, so the decision this run reaches cannot depend on it."""
+        nonlocal turn
+        groups = [calls] if parallel else [[c] for c in calls]
+        for group in groups:
+            turn += 1
+            G.check_step_cap(turn)
+            _record_calls(result, group, already_called)
+            for name, kwargs in group:
+                out = execute(name, kwargs)
+                if on_result:
+                    on_result(name, kwargs, out)
+            tin, tout = C.estimate_tokens_for_run(turn)
+            result.tokens_in, result.tokens_out = tin, tout
+            result.cost_usd = C.price_run(tin, tout, "cheap")
+            G.check_budget_ceiling(result.cost_usd)
+            mode = "parallel batch" if parallel else "sequential call"
+            result.trace.append(
+                f"turn {turn}: {batch_label} ({mode}) -- {[c[0] for c in group]}"
+            )
 
     try:
         # ---- Turn 1: get_claim, alone -----------------------------------
@@ -148,13 +183,11 @@ def _run_case_scripted(claim_id: str, autonomy: str, auto_confirm: bool, verbose
             result.trace.append(f"turn {turn}: narrative flagged by guardrail patterns {patterns} -- stopped, no further tools called")
             return result
 
-        # ---- Turn 2: parallel batch --------------------------------------
-        turn += 1
-        G.check_step_cap(turn)
+        # ---- Turn 2: independent lookups + per-line coverage checks -------
+        # (batched into one turn when parallel=True, one turn each when not)
         calls = S.plan_turn2(claim)
-        _record_calls(result, calls, already_called)
-        for name, kwargs in calls:
-            out = execute(name, kwargs)
+
+        def _route_turn2(name, kwargs, out):
             if name == "lookup_policy":
                 memory["policy"] = out
             elif name == "get_hospital_status":
@@ -163,12 +196,8 @@ def _run_case_scripted(claim_id: str, autonomy: str, auto_confirm: bool, verbose
                 memory["history"] = out
             elif name == "check_coverage":
                 memory["coverage"][kwargs["procedure_code"]] = out
-        result.trace.append(f"turn {turn}: parallel batch of {len(calls)} calls")
 
-        tin, tout = C.estimate_tokens_for_run(turn)
-        result.tokens_in, result.tokens_out = tin, tout
-        result.cost_usd = C.price_run(tin, tout, "cheap")
-        G.check_budget_ceiling(result.cost_usd)
+        execute_batch(calls, "policy/hospital/history/coverage lookups", on_result=_route_turn2)
 
         trigger, reason = S.policy_level_verdict(claim, memory["policy"], memory["history"])
         if trigger:
@@ -181,18 +210,10 @@ def _run_case_scripted(claim_id: str, autonomy: str, auto_confirm: bool, verbose
         # ---- Turn 3 (conditional): preauth chase for lines that need one -
         preauth_calls = S.plan_turn3_preauth_calls(claim, memory["coverage"])
         if preauth_calls:
-            turn += 1
-            G.check_step_cap(turn)
-            _record_calls(result, preauth_calls, already_called)
-            for name, kwargs in preauth_calls:
-                out = execute(name, kwargs)
+            def _route_preauth(name, kwargs, out):
                 memory["preauth"][kwargs["procedure_code"]] = out
-            result.trace.append(f"turn {turn}: {len(preauth_calls)} pre-authorisation chase(s)")
 
-            tin, tout = C.estimate_tokens_for_run(turn)
-            result.tokens_in, result.tokens_out = tin, tout
-            result.cost_usd = C.price_run(tin, tout, "cheap")
-            G.check_budget_ceiling(result.cost_usd)
+            execute_batch(preauth_calls, "pre-authorisation chase", on_result=_route_preauth)
 
         # ---- Resolve every line -------------------------------------------
         outcome = S.resolve_lines(claim, memory["coverage"], memory["preauth"])
