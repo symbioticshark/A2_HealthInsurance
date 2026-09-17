@@ -311,12 +311,39 @@ def _run_case_live(claim_id: str, autonomy: str, auto_confirm: bool, model: str,
         result.evidence.append(name)
         return out
 
+    def invalidate(trigger, detail):
+        """Record an invalid trial without turning it into an escalation."""
+        result.decision = None
+        result.trigger = trigger
+        result.guardrail_stop = trigger
+        result.turns = turn
+        result.trace.append(f"turn {turn}: INVALID MODEL OUTPUT -- {trigger}: {detail}")
+        return result
+
     try:
         while True:
             turn += 1
             G.check_step_cap(turn)
 
-            text, usage = L.call_model(messages, model=model)
+            try:
+                text, usage = L.call_model(messages, model=model)
+            except Exception as exc:
+                # Keep every successfully reported charge from earlier turns.
+                # The failed/timed-out request itself may still be billed, so
+                # the accumulated value is explicitly labelled as partial.
+                timed_out = L.is_timeout_error(exc)
+                trigger = "request_timeout" if timed_out else "request_error"
+                result.decision = None
+                result.trigger = trigger
+                result.guardrail_stop = trigger
+                result.turns = turn
+                result.cost_is_measured = False
+                result.cost_source = f"partial_known_cost_unknown_{'timeout' if timed_out else 'error'}"
+                result.trace.append(
+                    f"turn {turn}: {trigger} -- {type(exc).__name__}: {exc}; "
+                    "the current request cost is unknown and no automatic retry was made"
+                )
+                return result
             result.tokens_in += usage["input_tokens"]
             result.tokens_out += usage["output_tokens"]
             result.cached_input_tokens += usage.get("cached_input_tokens", 0)
@@ -347,7 +374,10 @@ def _run_case_live(claim_id: str, autonomy: str, auto_confirm: bool, model: str,
             # sitting right there in the same message, and force-escalated
             # every case that concluded this way. Executing first means the
             # gate check below sees the real, current evidence.
-            calls = L.parse_actions(text)
+            try:
+                calls = L.parse_actions(text)
+            except ValueError as exc:
+                return invalidate("malformed_model_output", f"unparseable Action: {exc}")
             if calls:
                 _record_calls(result, calls, already_called)
                 observations = []
@@ -359,7 +389,10 @@ def _run_case_live(claim_id: str, autonomy: str, auto_confirm: bool, model: str,
                     observations.append(f"Observation ({name}): {out}")
                 result.trace.append(f"turn {turn}: {len(calls)} call(s) -- {[c[0] for c in calls]}")
 
-            final = L.parse_final(text)
+            try:
+                final = L.parse_final(text)
+            except ValueError as exc:
+                return invalidate("malformed_model_output", f"unparseable Final: {exc}")
             if final is not None:
                 decision = final.get("decision")
                 if decision not in ("approve_in_principle", "request_document", "escalate"):
@@ -382,13 +415,14 @@ def _run_case_live(claim_id: str, autonomy: str, auto_confirm: bool, model: str,
                 return result
 
             if not calls:
-                result.trace.append(f"turn {turn}: model produced neither Action nor Final -- treating as a stall")
-                raise G.GuardrailStop("no_action_no_final", "model turn had no parseable Action or Final")
+                return invalidate(
+                    "no_action_no_final", "model produced neither a parseable Action nor Final"
+                )
 
             messages.append({"role": "user", "content": "\n".join(observations)})
 
     except G.GuardrailStop as gs:
-        result.decision = "escalate"
+        result.decision = None if gs.trigger == "invalid_decision" else "escalate"
         result.trigger = gs.trigger
         result.guardrail_stop = gs.trigger
         result.turns = turn

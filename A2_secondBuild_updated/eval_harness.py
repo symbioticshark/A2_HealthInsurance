@@ -138,10 +138,27 @@ def run_evaluation(cases=None, trials=1, autonomy=None, model=None,
             durations = []
             case_trials = effective_trial_counts[case_id]
             for trial in range(case_trials):
-                run = loop.run_case(
-                    case_id, autonomy=autonomy, model=model,
-                    backend=backend, verbose=verbose,
-                )
+                try:
+                    run = loop.run_case(
+                        case_id, autonomy=autonomy, model=model,
+                        backend=backend, verbose=verbose,
+                    )
+                except Exception as exc:
+                    # A live provider/network/format failure belongs to this
+                    # trial, not to every trial after it.  Record a failed run
+                    # and continue so the final report exposes instability
+                    # instead of disappearing with a traceback halfway through.
+                    run = loop.RunResult(
+                        case_id=case_id,
+                        autonomy=autonomy,
+                        model=model_used,
+                        decision=None,
+                        trigger="run_error",
+                        guardrail_stop="run_error",
+                        trace=[f"unhandled {type(exc).__name__}: {exc}"],
+                        cost_is_measured=False,
+                        cost_source="unavailable",
+                    )
                 passed = grade(run, label)
                 passes.append(passed)
                 durations.append(run.wall_clock_seconds)

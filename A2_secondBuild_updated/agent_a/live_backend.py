@@ -26,6 +26,12 @@ def get_api_key():
     )
 
 
+def is_timeout_error(exc: Exception) -> bool:
+    """Keep vendor-specific timeout detection inside the live backend."""
+    import requests
+    return isinstance(exc, requests.exceptions.Timeout)
+
+
 def _raise_with_response_detail(response, action: str):
     """Raise an HTTP error that preserves OpenRouter's useful response body."""
     if response.ok:
@@ -210,6 +216,10 @@ def call_model(messages: list, model: str = None, reasoning: dict = None):
         "model": model or config.MODEL,
         "messages": messages,
         "max_tokens": 1000,
+        # This task is rule-based.  A zero temperature cannot make every
+        # provider perfectly deterministic, but it removes avoidable sampling
+        # variance and materially improves repeatability between trials.
+        "temperature": 0,
     }
     if reasoning:
         body["reasoning"] = reasoning
@@ -219,7 +229,11 @@ def call_model(messages: list, model: str = None, reasoning: dict = None):
         f"{config.BASE_URL}/chat/completions",
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         json=body,
-        timeout=60,
+        # A slow model may legitimately need more than 60 seconds to return.
+        # Keep connection failure detection short, but allow a longer response
+        # window. Calls are deliberately not retried because an uncertain
+        # timeout may already have been charged by the provider.
+        timeout=(15, 180),
     )
     wall_clock = time.perf_counter() - t0
     _raise_with_response_detail(resp, "OpenRouter chat completion")
@@ -354,10 +368,20 @@ def parse_actions(text: str):
             raise ValueError(f"Action: {name} had no matching closing parenthesis. Raw model output:\n{text}")
 
         arg_str = text[paren_open_pos:i - 1].strip()
+        # Some models emit a prose sentinel immediately before a valid Final,
+        # e.g. `Action: None (no further actions needed)`.  It is not a tool
+        # call and must not prevent the Final object from being consumed.
+        if name.lower() in {"none", "null", "no_action"}:
+            pos = i
+            continue
         try:
             kwargs = _extract_json(arg_str) if arg_str else {}
         except ValueError as e:
             raise ValueError(f"Action: {name} had unparseable arguments. Raw model output:\n{text}\n\nError: {e}")
+        if not isinstance(kwargs, dict):
+            raise ValueError(
+                f"Action: {name} arguments must be a JSON object. Raw model output:\n{text}"
+            )
 
         calls.append((name, kwargs))
         pos = i
@@ -373,7 +397,15 @@ def parse_final(text: str):
     if idx == -1:
         return None
     rest = text[idx + len("Final:"):]
+    # `Final:` is occasionally emitted as a heading before the model has
+    # actually supplied the object. The loop decides whether valid Action
+    # calls in the same response allow processing to continue.
+    if not rest.strip():
+        return None
     try:
-        return _extract_json(rest)
+        final = _extract_json(rest)
     except ValueError as e:
         raise ValueError(f"Final: was not parseable JSON. Raw model output:\n{text}\n\nError: {e}")
+    if not isinstance(final, dict):
+        raise ValueError(f"Final: must contain one JSON object. Raw model output:\n{text}")
+    return final
