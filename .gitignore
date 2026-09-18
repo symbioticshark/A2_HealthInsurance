@@ -2,3 +2,4 @@ local_config.py
 .venv/
 __pycache__/
 *.pyc
+.DS_Store
