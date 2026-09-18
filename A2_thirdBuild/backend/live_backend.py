@@ -15,15 +15,51 @@ internet access. Test it with:
 """
 import json
 import os
+import re
 import time
 
 from config import config
 from config import local_settings
 
+_RUNTIME_API_KEY = ""
+
+
+def set_runtime_api_key(value: str = ""):
+    """Use a newly entered key immediately without mutating the process environment."""
+    global _RUNTIME_API_KEY
+    _RUNTIME_API_KEY = (value or "").strip()
+
+
+def get_api_key_with_source():
+    if _RUNTIME_API_KEY:
+        return _RUNTIME_API_KEY, "current session"
+    environment_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if environment_key:
+        return environment_key, "environment variable"
+    local_key = local_settings.get_local_config_value("OPENROUTER_API_KEY", "") or ""
+    return local_key.strip(), "local configuration" if local_key.strip() else "not configured"
+
+
 def get_api_key():
-    return os.environ.get("OPENROUTER_API_KEY") or local_settings.get_local_config_value(
-        "OPENROUTER_API_KEY", ""
+    return get_api_key_with_source()[0]
+
+
+def sanitize_error_text(value) -> str:
+    """Remove credentials from provider/network text before display or logging."""
+    text = str(value or "")
+    current_key = get_api_key()
+    if current_key:
+        text = text.replace(current_key, "[REDACTED]")
+    text = re.sub(r"(?i)\bBearer\s+[^\s,;]+", "Bearer [REDACTED]", text)
+    text = re.sub(
+        r"(?i)([\"']?(?:api[_-]?key|authorization|token|secret)[\"']?\s*[:=]\s*)"
+        r"[\"']?[^\s,;}\"']+[\"']?",
+        r"\1[REDACTED]",
+        text,
     )
+    text = re.sub(r"(?i)\bsk-or-[A-Za-z0-9_-]{8,}\b", "[REDACTED]", text)
+    limit = config.ERROR_DETAIL_MAX_CHARS
+    return text if len(text) <= limit else text[:limit] + "..."
 
 
 def is_timeout_error(exc: Exception) -> bool:
@@ -44,11 +80,10 @@ def _raise_with_response_detail(response, action: str):
             detail = api_error.get("message") or detail
     except (TypeError, ValueError):
         pass
-    detail = detail or response.reason or "No response detail"
+    detail = sanitize_error_text(detail or response.reason or "No response detail")
     import requests
     raise requests.HTTPError(
-        f"{action} failed (HTTP {response.status_code}): {detail}",
-        response=response,
+        f"{action} failed (HTTP {response.status_code}): {detail}"
     )
 
 
@@ -61,7 +96,9 @@ def list_models():
     if key:
         headers["Authorization"] = f"Bearer {key}"
     response = requests.get(
-        f"{config.BASE_URL}/models", headers=headers, params={"limit": 1000}, timeout=30
+        f"{config.BASE_URL}/models", headers=headers,
+        params={"limit": config.MODEL_CATALOG_LIMIT},
+        timeout=(config.HTTP_CONNECT_TIMEOUT_SECONDS, config.HTTP_READ_TIMEOUT_SECONDS),
     )
     _raise_with_response_detail(response, "OpenRouter model catalog lookup")
     return response.json().get("data", [])
@@ -89,7 +126,7 @@ def get_credit_balance():
         response = requests.get(
             f"{config.BASE_URL}/credits",
             headers={"Authorization": f"Bearer {key}"},
-            timeout=30,
+            timeout=(config.HTTP_CONNECT_TIMEOUT_SECONDS, config.HTTP_READ_TIMEOUT_SECONDS),
         )
         if response.ok:
             data = response.json().get("data", {})
@@ -108,7 +145,7 @@ def get_credit_balance():
         key_response = requests.get(
             f"{config.BASE_URL}/key",
             headers={"Authorization": f"Bearer {key}"},
-            timeout=30,
+            timeout=(config.HTTP_CONNECT_TIMEOUT_SECONDS, config.HTTP_READ_TIMEOUT_SECONDS),
         )
         _raise_with_response_detail(key_response, "OpenRouter API key balance lookup")
         key_data = key_response.json().get("data", {})
@@ -125,7 +162,7 @@ def get_credit_balance():
             "source": "api_key_limit_remaining",
         }
     except requests.RequestException as exc:
-        return {"available": False, "reason": f"Balance lookup failed: {exc}"}
+        return {"available": False, "reason": f"Balance lookup failed: {sanitize_error_text(exc)}"}
 
 SYSTEM_PROMPT_TEMPLATE = """You are a claims-processing agent. You reason step by step and act by \
 calling tools. On each turn, output a Thought: line, then one or more \
@@ -215,7 +252,7 @@ def call_model(messages: list, model: str = None, reasoning: dict = None):
     body = {
         "model": model or config.MODEL,
         "messages": messages,
-        "max_tokens": 1000,
+        "max_tokens": config.MODEL_MAX_OUTPUT_TOKENS,
         # This task is rule-based.  A zero temperature cannot make every
         # provider perfectly deterministic, but it removes avoidable sampling
         # variance and materially improves repeatability between trials.
@@ -233,7 +270,7 @@ def call_model(messages: list, model: str = None, reasoning: dict = None):
         # Keep connection failure detection short, but allow a longer response
         # window. Calls are deliberately not retried because an uncertain
         # timeout may already have been charged by the provider.
-        timeout=(15, 180),
+        timeout=(config.HTTP_CONNECT_TIMEOUT_SECONDS, config.MODEL_READ_TIMEOUT_SECONDS),
     )
     wall_clock = time.perf_counter() - t0
     _raise_with_response_detail(resp, "OpenRouter chat completion")
@@ -258,18 +295,17 @@ def call_model(messages: list, model: str = None, reasoning: dict = None):
 
 
 def _extract_json(raw: str):
-    """Models don't always emit strict, single-line JSON -- multi-line
-    formatting, single quotes, or a trailing comma are all common. This
-    finds the first balanced {...} block (correctly ignoring braces that
-    appear INSIDE quoted string values, e.g. a reason field containing
-    literal parentheses or braces), tries json.loads, then falls back to
-    ast.literal_eval (handles single-quoted Python-style dicts), and only
-    then gives up with the raw text visible in the error."""
-    import ast
+    """Extract one bounded, strict JSON object from a model response."""
+    if not isinstance(raw, str):
+        raise ValueError("model output must be text")
+    if len(raw) > config.MODEL_OUTPUT_MAX_CHARS:
+        raise ValueError(
+            f"model output exceeds {config.MODEL_OUTPUT_MAX_CHARS} characters"
+        )
 
     start = raw.find("{")
     if start == -1:
-        raise ValueError(f"no '{{' found in: {raw!r}")
+        raise ValueError(f"no '{{' found in: {sanitize_error_text(raw[:200])!r}")
 
     depth = 0
     in_string = False
@@ -297,18 +333,30 @@ def _extract_json(raw: str):
                     end = i + 1
                     break
     if end is None:
-        raise ValueError(f"unbalanced braces in: {raw!r}")
+        raise ValueError("unbalanced braces in model output")
 
     candidate = raw[start:end]
-
+    if len(candidate) > config.MODEL_JSON_MAX_CHARS:
+        raise ValueError(
+            f"JSON object exceeds {config.MODEL_JSON_MAX_CHARS} characters"
+        )
     try:
         return json.loads(candidate)
-    except json.JSONDecodeError:
-        pass
-    try:
-        return ast.literal_eval(candidate)
-    except (ValueError, SyntaxError) as e:
-        raise ValueError(f"could not parse as JSON or Python literal: {candidate!r}") from e
+    except (json.JSONDecodeError, RecursionError) as exc:
+        raise ValueError("model output must contain valid strict JSON") from exc
+
+
+def _validate_model_output(text):
+    if not isinstance(text, str):
+        raise ValueError("model output must be text")
+    if len(text) > config.MODEL_OUTPUT_MAX_CHARS:
+        raise ValueError(
+            f"model output exceeds {config.MODEL_OUTPUT_MAX_CHARS} characters"
+        )
+
+
+def _safe_output_preview(text):
+    return sanitize_error_text(str(text)[:config.ERROR_DETAIL_MAX_CHARS])
 
 
 def parse_actions(text: str):
@@ -323,7 +371,7 @@ def parse_actions(text: str):
     doesn't get miscounted as the call's own closing paren.
 
     Returns a list of (tool_name, kwargs) tuples."""
-    import re
+    _validate_model_output(text)
 
     calls = []
     pos = 0
@@ -365,7 +413,10 @@ def parse_actions(text: str):
             i += 1
 
         if depth != 0:
-            raise ValueError(f"Action: {name} had no matching closing parenthesis. Raw model output:\n{text}")
+            raise ValueError(
+                f"Action: {name} had no matching closing parenthesis. "
+                f"Output preview: {_safe_output_preview(text)!r}"
+            )
 
         arg_str = text[paren_open_pos:i - 1].strip()
         # Some models emit a prose sentinel immediately before a valid Final,
@@ -377,10 +428,14 @@ def parse_actions(text: str):
         try:
             kwargs = _extract_json(arg_str) if arg_str else {}
         except ValueError as e:
-            raise ValueError(f"Action: {name} had unparseable arguments. Raw model output:\n{text}\n\nError: {e}")
+            raise ValueError(
+                f"Action: {name} had unparseable arguments. "
+                f"Output preview: {_safe_output_preview(text)!r}. Error: {e}"
+            ) from e
         if not isinstance(kwargs, dict):
             raise ValueError(
-                f"Action: {name} arguments must be a JSON object. Raw model output:\n{text}"
+                f"Action: {name} arguments must be a JSON object. "
+                f"Output preview: {_safe_output_preview(text)!r}"
             )
 
         calls.append((name, kwargs))
@@ -393,6 +448,7 @@ def parse_final(text: str):
     """Finds `Final:` anywhere in the response and parses everything after
     it as one JSON object, via the same brace-balanced, string-aware,
     multi-line-tolerant extractor as parse_actions."""
+    _validate_model_output(text)
     idx = text.find("Final:")
     if idx == -1:
         return None
@@ -405,7 +461,13 @@ def parse_final(text: str):
     try:
         final = _extract_json(rest)
     except ValueError as e:
-        raise ValueError(f"Final: was not parseable JSON. Raw model output:\n{text}\n\nError: {e}")
+        raise ValueError(
+            f"Final: was not parseable JSON. "
+            f"Output preview: {_safe_output_preview(text)!r}. Error: {e}"
+        ) from e
     if not isinstance(final, dict):
-        raise ValueError(f"Final: must contain one JSON object. Raw model output:\n{text}")
+        raise ValueError(
+            f"Final: must contain one JSON object. "
+            f"Output preview: {_safe_output_preview(text)!r}"
+        )
     return final

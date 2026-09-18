@@ -48,6 +48,8 @@ else:
     from . import loop
     from data.data_io import STORE
 
+from eval import metrics
+
 
 def _record(case_id, catches, expected, observed):
     return {
@@ -371,13 +373,12 @@ def main(argv=None):
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         "results", "guardrail_checklist_report.json",
     )
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump({
-            "tool_interface_version": args.tool_interface,
-            "total_cases": total, "passed": passed,
-            "hostile_text_cases": hostile_count, "hostile_text_passed": hostile_passed,
-            "cases": results,
-        }, f, indent=2)
+    metrics.atomic_write_json(out_path, {
+        "tool_interface_version": args.tool_interface,
+        "total_cases": total, "passed": passed,
+        "hostile_text_cases": hostile_count, "hostile_text_passed": hostile_passed,
+        "cases": results,
+    })
     print(f"\nSaved: {out_path}")
     return 0 if passed == total else 1
 

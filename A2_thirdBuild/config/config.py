@@ -16,6 +16,17 @@ BACKEND = os.environ.get("A2_BACKEND", "scripted")   # "scripted" | "live"
 MODEL = os.environ.get("A2_MODEL", "anthropic/claude-3-5-haiku")  # only used when BACKEND="live"
 BASE_URL = os.environ.get("A2_BASE_URL", "https://openrouter.ai/api/v1")
 
+# Shared network and model-output limits. Short control-plane requests use the
+# short read timeout; paid model inference gets a longer response window.
+HTTP_CONNECT_TIMEOUT_SECONDS = 15
+HTTP_READ_TIMEOUT_SECONDS = 30
+MODEL_READ_TIMEOUT_SECONDS = 180
+MODEL_CATALOG_LIMIT = 1000
+MODEL_MAX_OUTPUT_TOKENS = 1000
+MODEL_OUTPUT_MAX_CHARS = 50_000
+MODEL_JSON_MAX_CHARS = 20_000
+ERROR_DETAIL_MAX_CHARS = 500
+
 # D6's three price tiers (section 7 of the brief), USD per million tokens,
 # (input, output). Used by cost_model.py -- kept alongside config so the
 # whole vendor-neutral surface lives in one file.

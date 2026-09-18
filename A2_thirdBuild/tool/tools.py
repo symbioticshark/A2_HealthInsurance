@@ -36,6 +36,7 @@ from .tools_v1 import get_claim_history as get_claim_history_v1
 from .tools_v2 import get_claim_history as get_claim_history_v2
 
 LEDGER_PATH = os.environ.get("A2_LEDGER_PATH", os.path.join(os.path.dirname(__file__), "..", "results", "decision_ledger.jsonl"))
+RUN_CONTEXT = {}
 
 
 class ProcedureNotFoundError(Exception):
@@ -299,6 +300,11 @@ def issue_decision_letter(case_id: str, decision: str, reason: str, evidence: li
     }
     if extra:
         record.update(extra)
+    # New 3.0 evaluations attach optional session metadata. Legacy callers and
+    # 2.5 ledger rows remain valid without these fields.
+    for key in ("session_id", "trial"):
+        if RUN_CONTEXT.get(key) is not None:
+            record[key] = RUN_CONTEXT[key]
 
     os.makedirs(os.path.dirname(LEDGER_PATH), exist_ok=True)
     with open(LEDGER_PATH, "a") as f:

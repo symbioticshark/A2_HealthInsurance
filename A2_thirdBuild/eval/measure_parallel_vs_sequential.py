@@ -36,7 +36,7 @@ import tempfile
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
-from eval import eval_harness
+from eval import eval_harness, metrics
 from agent import guardrails as G
 from agent import loop
 from tool import tools as T
@@ -172,7 +172,7 @@ def _main():
         print("\nCorrectness check: IDENTICAL on every run -- correctness did not move.")
 
     print()
-    print("=== Bonus finding: sequential execution under our REAL STEP_CAP=6 ===")
+    print(f"=== Bonus finding: sequential execution under our REAL STEP_CAP={G.STEP_CAP} ===")
     print(f"Runs wrongly escalated as step_cap_hit: {sequential_shipped_summary['step_cap_hits']} "
           f"/ {sequential_shipped_summary['total_runs']}")
     print(f"Pass rate collapses to: {sequential_shipped_summary['pass_rate_pct']}% "
@@ -188,8 +188,7 @@ def _main():
         "correctness_mismatches": mismatches,
     }
     out_path = os.path.join(PROJECT_ROOT, "results", "parallel_vs_sequential_report.json")
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2)
+    metrics.atomic_write_json(out_path, report)
     print(f"\nSaved: {out_path}")
 
 

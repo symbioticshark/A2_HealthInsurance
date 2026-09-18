@@ -6,10 +6,12 @@ import os
 import statistics as stats
 import sys
 import time
+import uuid
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 from config import config, local_settings
+from backend import live_backend
 from agent import loop
 from eval import metrics
 from tool import tools
@@ -124,9 +126,10 @@ def run_evaluation(cases=None, trials=1, autonomy=None, model=None,
     person = metrics.get_person_name()
     safe_person = metrics.safe_filename(person)
     permanent_dir = os.path.join(PROJECT_ROOT, "results", safe_person)
-    run_id = f"{int(time.time())}-{os.getpid()}"
-    staging_dir = metrics.begin_transaction(permanent_dir, run_id)
+    session_id = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
+    staging_dir = metrics.begin_transaction(permanent_dir, session_id)
     original_ledger_path = tools.LEDGER_PATH
+    original_run_context = dict(tools.RUN_CONTEXT)
     metrics.configure_paths(staging_dir)
     tools.LEDGER_PATH = os.path.join(staging_dir, "decision_ledger.jsonl")
 
@@ -141,6 +144,7 @@ def run_evaluation(cases=None, trials=1, autonomy=None, model=None,
             durations = []
             case_trials = effective_trial_counts[case_id]
             for trial in range(case_trials):
+                tools.RUN_CONTEXT = {"session_id": session_id, "trial": trial}
                 try:
                     run = loop.run_case(
                         case_id, autonomy=autonomy, model=model,
@@ -158,7 +162,10 @@ def run_evaluation(cases=None, trials=1, autonomy=None, model=None,
                         decision=None,
                         trigger="run_error",
                         guardrail_stop="run_error",
-                        trace=[f"unhandled {type(exc).__name__}: {exc}"],
+                        trace=[
+                            f"unhandled {type(exc).__name__}: "
+                            f"{live_backend.sanitize_error_text(exc)}"
+                        ],
                         cost_is_measured=False,
                         cost_source="unavailable",
                     )
@@ -166,6 +173,7 @@ def run_evaluation(cases=None, trials=1, autonomy=None, model=None,
                 passes.append(passed)
                 durations.append(run.wall_clock_seconds)
                 row = {
+                    "session_id": session_id,
                     "case_id": case_id,
                     "family": label.get("family"),
                     "trial": trial,
@@ -204,6 +212,7 @@ def run_evaluation(cases=None, trials=1, autonomy=None, model=None,
                     metrics.log_run(metrics.from_run_result(
                         run, backend=backend, model=run.model, label_pass=passed,
                         tool_interface_version=interface_version,
+                        session_id=session_id, trial=trial,
                     ))
                 if verbose:
                     mark = "PASS" if passed else "FAIL"
@@ -230,7 +239,7 @@ def run_evaluation(cases=None, trials=1, autonomy=None, model=None,
             rows, person=person, backend=backend, model=model_used,
             autonomy=autonomy, cases_requested=len(case_ids),
             trials_per_case=uniform_trials, run_mode=run_mode,
-            trial_plan=trial_plan,
+            trial_plan=trial_plan, session_id=session_id,
         )
         if persist:
             metrics.log_session(session)
@@ -271,6 +280,7 @@ def run_evaluation(cases=None, trials=1, autonomy=None, model=None,
         raise
     finally:
         tools.LEDGER_PATH = original_ledger_path
+        tools.RUN_CONTEXT = original_run_context
         metrics.configure_paths(permanent_dir)
 
 

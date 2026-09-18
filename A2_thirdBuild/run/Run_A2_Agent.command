@@ -68,7 +68,7 @@ echo "Checking project dependencies..."
 }
 
 echo "Starting the PE6201 A2 Agent interactive launcher..."
-echo "Choose an evaluation set, the guardrail checklist, or the V1/V2 comparison from the menu."
+echo "Use the menu for evaluation, detailed results, and session comparisons."
 "$VENV_PY" "$ROOT_DIR/run/main.py"
 run_status=$?
 if [ "$run_status" -ne 0 ]; then

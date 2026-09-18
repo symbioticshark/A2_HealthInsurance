@@ -1,4 +1,4 @@
-# PE6201 A2 Agent 2.5
+# PE6201 A2 Agent 3.0
 
 This is the updated team-testing version of the Problem A health-insurance
 agent. Normal use does not require typing Python commands. Windows and macOS
@@ -28,6 +28,8 @@ backend, evaluation, run, configuration, results, and documentation layers.
 - Personal history and comparison with other testers and the shared baseline.
 - Safe cancellation: an interrupted evaluation does not publish a partial
   result as a completed run.
+- A per-tester writer lock prevents two concurrent evaluations from merging
+  into the same history, while different testers remain independent.
 
 ## Before starting
 
@@ -43,6 +45,10 @@ You need:
 The launcher never installs Python. If it cannot find Python automatically, it
 asks for the full path to a Python executable that is already installed.
 
+After the launcher has prepared the private environment, developers may also
+run `run/main.py` with that environment's Python. This starts the same program
+but skips launcher checks, environment repair, and dependency installation.
+
 ## Windows: step-by-step
 
 1. Open the `A2_thirdBuild/run` folder in File Explorer.
@@ -52,8 +58,8 @@ asks for the full path to a Python executable that is already installed.
    `B` to exit without changing the project.
 5. On the first successful launch, enter your tester name. Use the same name
    for later runs if you want them kept in the same personal history.
-6. Select an option from the main menu by typing its letter and pressing Enter.
-7. When finished, select `Q` to exit.
+6. Select an option from the main menu by typing its number and pressing Enter.
+7. When finished, select `6` to exit.
 
 The first launch can take longer because the private environment and dependency
 must be prepared. Later launches normally reuse that environment.
@@ -66,8 +72,8 @@ must be prepared. Later launches normally reuse that environment.
 4. If Python is not found, enter the full path to an existing Python 3.9 or
    newer executable. You may enter `B` to exit.
 5. Enter your tester name when requested.
-6. Use the same letter-and-number menus described below.
-7. Select `Q` when finished.
+6. Use the numbered menus described below.
+7. Select `6` when finished.
 
 If macOS says the command file is not executable, open Terminal in the `run`
 folder
@@ -83,20 +89,31 @@ environment rather than trying to use a Windows `.venv` copied with the folder.
 
 ## Main menu
 
-### A. Check environment, data, and configuration
+### 1. Environment check
 
 Use this first. It displays the app version, Python environment, configured
 model, backend, number of cases, number of negative cases, and personal result
-directory. It does not call a model or spend credit.
+directory. When a key is configured, it also validates that key through a
+no-inference API request. It does not call a model or spend model credit.
 
-### B. Scripted standard battery
+### 2. Run
+
+The Run menu contains scripted evaluation, the separate guardrail checklist,
+live evaluation, and the V1/V2 live comparison.
+
+#### Scripted evaluation
 
 Runs the deterministic local agent without OpenRouter. It follows the
 assignment repetition rule: 24 ordinary cases once and 16 negative cases three
 times, for 72 runs in total. This is useful for checking the data and local
 logic without spending credit.
 
-### C. Live run
+#### Guardrail checklist
+
+Runs the separate D3 checklist without OpenRouter. This is not the 40-case
+business evaluation set.
+
+#### Live evaluation
 
 Opens four choices:
 
@@ -108,33 +125,49 @@ Opens four choices:
 4. **Select cases and repetitions** — choose particular case IDs and how many
    times each selected case should run.
 
-Before a live run starts, the program asks you to choose V1 or V2 and then
-choose the model. It displays a complete preview and asks `Start this run? Y/N`.
-No paid case request is made if you answer `N`.
+Before a live run starts, the program validates the configured API key without
+calling a model. If validation fails, the user can retry, enter and atomically
+save a replacement key, or cancel. The program then asks for the tool version
+and model, displays a complete preview, and asks `Start this run? Y/N`. No paid
+case request is made if you answer `N`.
 
-### D. View latest result
+#### V1/V2 live comparison
 
-Shows the most recent completed result for the current tester, including model,
-mode, V1/V2, number of runs, accuracy, tokens, cost, time, and observed balance
-change when available.
+Runs one normal V1 standard battery and one normal V2 standard battery with the
+same model. Both runs enter the ordinary tester history, after which the shared
+V1/V2 comparison engine writes `v1_v2_detailed_comparison.json` in that
+tester's folder.
 
-### E. Compare results
+### 3. Results
 
-Choose either:
+One compact screen groups six actions under individual details, history, and
+comparison:
 
-1. Your own run history.
-2. All testers and the shared baseline.
+1. Latest detailed result.
+2. Select a session to view.
+3. Run-history overview.
+4. Compare any two sessions, including the existing across-tester comparison.
+5. Compare matching personal V1/V2 sessions.
+6. All-testers overview.
+
+Legacy 2.5 history is read without rewriting its source files.
 
 For a fair model comparison, compare runs made with the same tool-interface
 version and the same run mode. A 40-run quick validation should not be presented
 as equivalent to a 72-run standard battery.
 
-### F. Change tester, API key, or default model
+### 4. Settings
 
 Use this to change the tester name, replace the OpenRouter API key, or select a
-different default model. API-key input is hidden on screen.
+different default model, set the default tool interface, or check API
+connectivity. API-key input is represented by `*` characters on screen.
 
-### Q. Exit
+### 5. Help
+
+Shows the quick start, menu structure, trial rules, session/result model,
+API/cost safety notes, and direct command-line usage.
+
+### 6. Exit
 
 Closes the program normally.
 
@@ -190,17 +223,23 @@ Every tester receives a separate folder:
 results/<tester_name>/
 ```
 
-The two most useful files are:
+The latest-result convenience files are:
 
 - `<tester_name>_result.json` — the distilled result containing the environment,
   configuration, totals, accuracy, cost, important failures, and compact
   per-case evidence. Use this first for the report and demonstration video.
 - `<tester_name>_run_log.json` — full details for every case trial.
 
-The folder also contains append-only metric and session history used by the
-comparison menu, plus the decision ledger. A newly completed run replaces that
-tester's latest distilled result and full run log, while the history files keep
-earlier completed sessions for comparison.
+The historical source of truth is append-only:
+
+- `run_history.jsonl` — one row per completed evaluation session.
+- `metrics_log.jsonl` — one row per case trial.
+- `decision_ledger.jsonl` — one row per emitted decision action.
+
+A newly completed run replaces the latest convenience files, but not this
+history. `comparison_report.json` remains the multi-session overview. The two
+overwriteable derived two-session reports are `detailed_comparison.json` and
+`v1_v2_detailed_comparison.json`, both inside the tester folder.
 
 ## Stopping safely
 
@@ -209,7 +248,7 @@ earlier completed sessions for comparison.
   the menu returns without publishing a partial run as completed.
 - During environment preparation, close the window if necessary. Run the
   launcher again later and it will repair the private environment.
-- Use `Q` for a normal exit.
+- Use main-menu option `6` for a normal exit.
 
 ## Common problems
 
@@ -231,12 +270,12 @@ can change over time.
 
 ### OpenRouter reports an authentication error
 
-Use main-menu option `F`, choose **Change API key**, and enter the correct key.
-The updated error message includes OpenRouter's response explanation.
+Use main-menu option `4`, choose **Change API key**, and enter the correct key.
+The program immediately rechecks the replacement without calling a model.
 
 ### Old prices or old screen layout appear
 
 Check that the launcher came from `A2_thirdBuild/run` and that the main
-menu shows `PE6201 A2 Agent 2.5`. Results produced by the old `A2_secondBuild`
+menu shows `PE6201 A2 Agent 3.0`. Results produced by the old `A2_secondBuild`
 version used an earlier estimated-cost system and should not be used as new
 measured-cost evidence.

@@ -29,7 +29,7 @@ def _approx_tokens(obj):
     return len(json.dumps(obj)) // 4
 
 
-def main():
+def build_report():
     labels = eval_harness.load_labels()
     member_ids = sorted({
         STORE.claims[case_id]["member_id"]
@@ -52,26 +52,28 @@ def main():
     v2_tokens = [r["v2_tokens"] for r in rows]
     v1_mean, v2_mean = stats.mean(v1_tokens), stats.mean(v2_tokens)
 
-    print(f"{'member_id':<10}{'v1 records':<12}{'v2 records':<12}{'v1 tokens':<11}{'v2 tokens'}")
-    for r in rows:
-        print(f"{r['member_id']:<10}{r['v1_records_returned']:<12}{r['v2_records_returned']:<12}"
-              f"{r['v1_tokens']:<11}{r['v2_tokens']}")
-
-    print()
-    print(f"Members measured: {len(rows)}")
-    print(f"Mean tokens per get_claim_history call -- v1: {v1_mean:.1f}   v2: {v2_mean:.1f}")
-    print(f"Max tokens per call                    -- v1: {max(v1_tokens)}   v2: {max(v2_tokens)}")
-    print(f"v1 returns {(v1_mean / v2_mean - 1) * 100:.0f}% more tokens than v2, on average, per call.")
-
-    report = {
+    return {
         "members_measured": len(rows), "per_member": rows,
         "mean_tokens_v1": round(v1_mean, 2), "mean_tokens_v2": round(v2_mean, 2),
         "max_tokens_v1": max(v1_tokens), "max_tokens_v2": max(v2_tokens),
+        "mean_reduction_pct_v2_vs_v1": round((1 - v2_mean / v1_mean) * 100, 2),
     }
-    out_path = os.path.join(PROJECT_ROOT, "results", "v1_v2_tool_tokens_report.json")
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2)
-    print(f"\nSaved: {out_path}")
+
+
+def main():
+    report = build_report()
+    print(f"{'member_id':<10}{'v1 records':<12}{'v2 records':<12}{'v1 tokens':<11}{'v2 tokens'}")
+    for row in report["per_member"]:
+        print(f"{row['member_id']:<10}{row['v1_records_returned']:<12}{row['v2_records_returned']:<12}"
+              f"{row['v1_tokens']:<11}{row['v2_tokens']}")
+    print()
+    print(f"Members measured: {report['members_measured']}")
+    print(f"Mean tokens per get_claim_history call -- v1: {report['mean_tokens_v1']:.1f}   "
+          f"v2: {report['mean_tokens_v2']:.1f}")
+    print(f"Max tokens per call                    -- v1: {report['max_tokens_v1']}   "
+          f"v2: {report['max_tokens_v2']}")
+    print(f"V2 reduces mean tool-return tokens by {report['mean_reduction_pct_v2_vs_v1']:.1f}%.")
+    print("No standalone file was written; this measurement is embedded in the detailed V1/V2 comparison.")
 
 
 if __name__ == "__main__":

@@ -86,7 +86,7 @@ echo Checking project dependencies...
 if errorlevel 1 goto failed
 
 echo Starting the PE6201 A2 Agent interactive launcher...
-echo Choose an evaluation set, the guardrail checklist, or the V1/V2 comparison from the menu.
+echo Use the menu for evaluation, detailed results, and session comparisons.
 "%VENV_PY%" "%CD%\run\main.py"
 set "RUN_STATUS=%ERRORLEVEL%"
 if not "%RUN_STATUS%"=="0" (

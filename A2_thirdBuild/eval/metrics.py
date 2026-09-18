@@ -55,6 +55,8 @@ _REMOTE_MODEL_PRICES = {}
 LOG_PATH = os.environ.get("A2_METRICS_LOG", "results/metrics_log.jsonl")
 SESSION_LOG_PATH = os.environ.get("A2_SESSION_LOG", "results/run_history.jsonl")
 COMPARISON_PATH = os.environ.get("A2_COMPARISON_PATH", "results/comparison_report.json")
+_TRANSACTION_LOCKS = {}
+_TRANSACTION_MANIFEST = ".commit_manifest.json"
 
 
 def configure_paths(output_dir: str):
@@ -205,26 +207,143 @@ def _safe_remove_tree(path: str, allowed_parent: str):
         shutil.rmtree(resolved)
 
 
-def begin_transaction(permanent_dir: str, run_id: str):
-    in_progress = os.path.join(permanent_dir, ".in_progress")
-    os.makedirs(in_progress, exist_ok=True)
+def _acquire_run_lock(permanent_dir: str):
+    """Hold one OS-backed writer lock per tester; the OS releases it on crash."""
+    os.makedirs(permanent_dir, exist_ok=True)
+    lock_path = os.path.join(permanent_dir, ".run.lock")
+    handle = open(lock_path, "a+b")
+    handle.seek(0, os.SEEK_END)
+    if handle.tell() == 0:
+        handle.write(b"0")
+        handle.flush()
+    handle.seek(0)
+    try:
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, IOError) as exc:
+        handle.close()
+        raise RuntimeError(
+            "Another run is already writing results for this tester. "
+            "Wait for it to finish or use a different tester profile."
+        ) from exc
+    return handle
+
+
+def _release_run_lock(staging_dir: str):
+    handle = _TRANSACTION_LOCKS.pop(os.path.abspath(staging_dir), None)
+    if handle is None:
+        return
+    _unlock_run_lock(handle)
+
+
+def _unlock_run_lock(handle):
+    try:
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
+def _atomic_restore_file(source: str, destination: str):
+    """Restore a backup without consuming it, so crash recovery is repeatable."""
+    directory = os.path.dirname(destination) or "."
+    fd, temp_path = tempfile.mkstemp(prefix="a2_restore_", suffix=".tmp", dir=directory)
+    try:
+        with open(source, "rb") as source_handle, os.fdopen(fd, "wb") as temp_handle:
+            shutil.copyfileobj(source_handle, temp_handle)
+            temp_handle.flush()
+            os.fsync(temp_handle.fileno())
+        os.replace(temp_path, destination)
+    except BaseException:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _restore_commit(manifest: dict, staging_dir: str, permanent_dir: str):
+    backup_dir = os.path.join(staging_dir, ".commit_backup")
+    for name in manifest.get("destination_names", []):
+        destination = os.path.join(permanent_dir, name)
+        backup = os.path.join(backup_dir, name)
+        if manifest.get("existed", {}).get(name):
+            if not os.path.isfile(backup):
+                raise RuntimeError(f"Cannot recover transaction; backup is missing: {backup}")
+            _atomic_restore_file(backup, destination)
+        elif os.path.isfile(destination):
+            os.unlink(destination)
+
+
+def _recover_abandoned_transactions(in_progress: str, permanent_dir: str):
+    """Roll back a process-crashed commit, or remove safely committed staging."""
     for name in os.listdir(in_progress):
         candidate = os.path.join(in_progress, name)
-        if os.path.isdir(candidate):
-            _safe_remove_tree(candidate, in_progress)
-        else:
+        if not os.path.isdir(candidate):
             os.unlink(candidate)
+            continue
+        manifest_path = os.path.join(candidate, _TRANSACTION_MANIFEST)
+        manifest = None
+        if os.path.isfile(manifest_path):
+            try:
+                with open(manifest_path, encoding="utf-8") as handle:
+                    manifest = json.load(handle)
+            except (OSError, ValueError):
+                raise RuntimeError(
+                    f"Cannot safely recover the interrupted transaction at {candidate}"
+                )
+        if manifest and manifest.get("state") == "committing":
+            _restore_commit(manifest, candidate, permanent_dir)
+        _safe_remove_tree(candidate, in_progress)
+
+
+def recover_transactions(permanent_dir: str):
+    """Recover an interrupted commit before menus or readers expose results."""
+    lock_handle = _acquire_run_lock(permanent_dir)
+    try:
+        in_progress = os.path.join(permanent_dir, ".in_progress")
+        if os.path.isdir(in_progress):
+            _recover_abandoned_transactions(in_progress, permanent_dir)
+            if not os.listdir(in_progress):
+                os.rmdir(in_progress)
+    finally:
+        _unlock_run_lock(lock_handle)
+
+
+def begin_transaction(permanent_dir: str, run_id: str):
+    lock_handle = _acquire_run_lock(permanent_dir)
+    in_progress = os.path.join(permanent_dir, ".in_progress")
     staging = os.path.join(in_progress, run_id)
-    os.makedirs(staging, exist_ok=False)
-    return staging
+    try:
+        os.makedirs(in_progress, exist_ok=True)
+        # The tester lock proves that any older staging directory is abandoned.
+        _recover_abandoned_transactions(in_progress, permanent_dir)
+        os.makedirs(staging, exist_ok=False)
+        _TRANSACTION_LOCKS[os.path.abspath(staging)] = lock_handle
+        return staging
+    except BaseException:
+        lock_handle.close()
+        raise
 
 
 def rollback_transaction(staging_dir: str, permanent_dir: str):
     in_progress = os.path.join(permanent_dir, ".in_progress")
-    if os.path.isdir(staging_dir):
-        _safe_remove_tree(staging_dir, in_progress)
-    if os.path.isdir(in_progress) and not os.listdir(in_progress):
-        os.rmdir(in_progress)
+    try:
+        if os.path.isdir(staging_dir):
+            _safe_remove_tree(staging_dir, in_progress)
+        if os.path.isdir(in_progress) and not os.listdir(in_progress):
+            os.rmdir(in_progress)
+    finally:
+        _release_run_lock(staging_dir)
 
 
 def _atomic_merge_text(source: str, destination: str):
@@ -265,17 +384,50 @@ def commit_transaction(staging_dir: str, permanent_dir: str):
             signal.signal(sig, signal.SIG_IGN)
     try:
         os.makedirs(permanent_dir, exist_ok=True)
-        for name in ("metrics_log.jsonl", "run_history.jsonl", "decision_ledger.jsonl"):
-            _atomic_merge_text(os.path.join(staging_dir, name), os.path.join(permanent_dir, name))
+        history_names = ("metrics_log.jsonl", "run_history.jsonl", "decision_ledger.jsonl")
         replace_names = [name for name in os.listdir(staging_dir) if name.endswith("_run_log.json")]
         replace_names.extend(name for name in os.listdir(staging_dir) if name.endswith("_result.json"))
-        for name in replace_names:
-            source = os.path.join(staging_dir, name)
-            if os.path.isfile(source):
+        destination_names = list(history_names) + replace_names
+        backup_dir = os.path.join(staging_dir, ".commit_backup")
+        existed = {}
+        try:
+            os.makedirs(backup_dir, exist_ok=True)
+            for name in destination_names:
                 destination = os.path.join(permanent_dir, name)
-                with open(source, encoding="utf-8") as handle:
-                    atomic_write_json(destination, json.load(handle))
-        rollback_transaction(staging_dir, permanent_dir)
+                existed[name] = os.path.isfile(destination)
+                if existed[name]:
+                    shutil.copy2(destination, os.path.join(backup_dir, name))
+            manifest = {
+                "state": "prepared",
+                "destination_names": destination_names,
+                "existed": existed,
+            }
+            manifest_path = os.path.join(staging_dir, _TRANSACTION_MANIFEST)
+            atomic_write_json(manifest_path, manifest)
+        except BaseException:
+            rollback_transaction(staging_dir, permanent_dir)
+            raise
+        try:
+            manifest["state"] = "committing"
+            atomic_write_json(manifest_path, manifest)
+            for name in history_names:
+                _atomic_merge_text(os.path.join(staging_dir, name), os.path.join(permanent_dir, name))
+            for name in replace_names:
+                source = os.path.join(staging_dir, name)
+                if os.path.isfile(source):
+                    destination = os.path.join(permanent_dir, name)
+                    with open(source, encoding="utf-8") as handle:
+                        atomic_write_json(destination, json.load(handle))
+            manifest["state"] = "committed"
+            atomic_write_json(manifest_path, manifest)
+        except BaseException:
+            try:
+                _restore_commit(manifest, staging_dir, permanent_dir)
+            finally:
+                rollback_transaction(staging_dir, permanent_dir)
+            raise
+        else:
+            rollback_transaction(staging_dir, permanent_dir)
     finally:
         for sig, handler in previous_handlers.items():
             signal.signal(sig, handler)
@@ -306,6 +458,8 @@ class RunMetrics:
     is_ghost_loop: bool = False
     human_handover: bool = False    # decision == "escalate" (any reason)
     label_pass: Optional[bool] = None   # filled in by the caller if a label exists
+    session_id: Optional[str] = None    # absent in legacy 2.5 rows
+    trial: Optional[int] = None         # absent in legacy 2.5 rows
     ts: float = field(default_factory=time.time)
 
     def as_dict(self):
@@ -313,7 +467,9 @@ class RunMetrics:
 
 
 def from_run_result(r, backend: str, model: str, label_pass: Optional[bool] = None,
-                    tool_interface_version: str = "v2") -> RunMetrics:
+                    tool_interface_version: str = "v2",
+                    session_id: Optional[str] = None,
+                    trial: Optional[int] = None) -> RunMetrics:
     """Builds a RunMetrics row from a loop.RunResult -- the bridge between
     what run_case() returns and what gets logged."""
     is_ghost = bool(r.guardrail_stop) and r.guardrail_stop in GHOST_LOOP_TRIGGERS
@@ -331,6 +487,7 @@ def from_run_result(r, backend: str, model: str, label_pass: Optional[bool] = No
         gate_confirmed=getattr(r, "gate_confirmed", None),
         guardrail_stop=r.guardrail_stop, is_ghost_loop=is_ghost,
         human_handover=(r.decision == "escalate"), label_pass=label_pass,
+        session_id=session_id, trial=trial,
     )
 
 
@@ -521,7 +678,8 @@ class SessionSummary:
 
 def build_session_summary(rows: list, person: str, backend: str, model: str, autonomy: str,
                            cases_requested: int, trials_per_case: Optional[int],
-                           run_mode: str = "all", trial_plan: dict = None) -> SessionSummary:
+                           run_mode: str = "all", trial_plan: dict = None,
+                           session_id: str = None) -> SessionSummary:
     """rows: the list of per-trial dicts from THIS invocation only (not the
     whole historical log) -- eval_harness.py passes its own `rows` list."""
     import uuid
@@ -542,7 +700,7 @@ def build_session_summary(rows: list, person: str, backend: str, model: str, aut
 
     now = time.time()
     return SessionSummary(
-        session_id=f"{int(now)}-{uuid.uuid4().hex[:8]}",
+        session_id=session_id or f"{int(now)}-{uuid.uuid4().hex[:8]}",
         person=person, ts=now, ts_iso=time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now)),
         backend=backend, model=model, autonomy=autonomy,
         cases_requested=cases_requested, trials_per_case=trials_per_case, total_case_trials=n,
