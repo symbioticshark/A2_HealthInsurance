@@ -40,15 +40,27 @@ Alternatively, open PowerShell in the `A2_thirdBuild` directory and run:
 
 ### macOS
 
-On the first launch, right-click `run/Run_A2_Agent.command` in Finder and
-select **Open**.
+The project cannot guarantee that macOS will allow the `.command` file to run
+immediately. Permission depends on the macOS version, file ownership,
+executable bit, download source, Gatekeeper settings, and organisation policy.
 
-Alternatively, use Terminal:
+On the first launch, try right-clicking `run/Run_A2_Agent.command` in Finder
+and selecting **Open**.
+
+If Terminal reports `Permission denied`, grant executable permission and try
+again:
 
 ```bash
 chmod +x run/Run_A2_Agent.command
 ./run/Run_A2_Agent.command
 ```
+
+If Gatekeeper still blocks the file, follow the actual message shown by macOS.
+Depending on the machine, this may require **System Settings > Privacy &
+Security > Open Anyway**. Grant permission only after confirming that the
+project files came from the expected source. On a managed Mac, follow the
+organisation's policy or ask its administrator. If permission cannot be
+granted, use the manual Terminal setup in Section 4 instead.
 
 The Windows and macOS launchers create separate platform-compatible virtual
 environments. Do not copy a Windows `config/.venv` to a Mac or vice versa.
@@ -96,7 +108,7 @@ Comparison
   6. All-testers overview
 ```
 
-## 4. Manual environment setup
+## 4. Manual command setup, dependency installation, and activation
 
 Use this section only if the launcher scripts cannot be used.
 
@@ -104,24 +116,56 @@ Use this section only if the launcher scripts cannot be used.
 
 ```powershell
 py -3 -m venv config\.venv
-.\config\.venv\Scripts\python.exe -m pip install -r config\requirements.txt
-.\config\.venv\Scripts\python.exe .\run\main.py
+.\config\.venv\Scripts\Activate.ps1
+python -m pip install --disable-pip-version-check -r config\requirements.txt
+python .\run\main.py
+deactivate
 ```
 
 If `py` is unavailable, replace `py -3` with the full path to a Python 3.9+
-executable.
+executable. The `pip install` command downloads and installs the required
+packages into `config/.venv`.
+
+If PowerShell blocks `Activate.ps1`, either use the direct interpreter method
+in Section 5 or, when permitted by the machine's security policy, allow scripts
+only for the current PowerShell process before activating:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\config\.venv\Scripts\Activate.ps1
+```
+
+Command Prompt users can activate the same environment with:
+
+```bat
+config\.venv\Scripts\activate.bat
+```
 
 ### macOS Terminal
 
 ```bash
 python3 -m venv config/.venv
-./config/.venv/bin/python -m pip install -r config/requirements.txt
-./config/.venv/bin/python run/main.py
+source config/.venv/bin/activate
+python -m pip install --disable-pip-version-check -r config/requirements.txt
+python run/main.py
+deactivate
 ```
+
+The `source` command activates the private environment for the current
+Terminal session. The `pip install` command downloads and installs the required
+packages inside that environment. Run `deactivate` when finished.
 
 ## 5. Direct command convention
 
-The examples below use `PYTHON` as shorthand for the private interpreter.
+After activating `config/.venv` as shown in Section 4, direct commands may use
+plain `python`:
+
+```text
+python run/main.py check
+```
+
+Activation is optional. If the environment is not activated, the examples
+below use `PYTHON` as shorthand for its private interpreter.
 
 Windows:
 

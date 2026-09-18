@@ -38,15 +38,23 @@ run\Run_A2_Agent.bat
 
 ### macOS
 
-第一次启动时，在 Finder 中右键单击 `run/Run_A2_Agent.command`，然后选择
+项目无法保证 macOS 会立即允许运行 `.command` 文件。它是否可以执行取决于 macOS
+版本、文件所有权、可执行权限、下载来源、Gatekeeper 设置以及组织安全策略。
+
+第一次启动时，可以先在 Finder 中右键单击 `run/Run_A2_Agent.command`，然后选择
 **Open（打开）**。
 
-也可以使用 Terminal：
+如果 Terminal 提示 `Permission denied`，请授予可执行权限后重试：
 
 ```bash
 chmod +x run/Run_A2_Agent.command
 ./run/Run_A2_Agent.command
 ```
+
+如果 Gatekeeper 仍然阻止该文件，请根据 macOS 实际显示的提示处理。部分设备可能
+需要进入 **System Settings > Privacy & Security > Open Anyway**。只有在确认项目文件
+来自预期来源后才应放开权限。对于受组织管理的 Mac，请遵循组织策略或联系管理员。
+如果无法授予权限，请改用第 4 节的手动 Terminal 配置。
 
 Windows 和 macOS 启动器会分别创建适用于本平台的虚拟环境。不要把 Windows
 生成的 `config/.venv` 复制到 Mac，也不要反向复制。
@@ -92,7 +100,7 @@ Comparison
   6. All-testers overview
 ```
 
-## 4. 手动配置环境
+## 4. 纯命令配置、依赖下载和环境激活
 
 只有在无法使用启动脚本时才需要执行本节操作。
 
@@ -100,23 +108,53 @@ Comparison
 
 ```powershell
 py -3 -m venv config\.venv
-.\config\.venv\Scripts\python.exe -m pip install -r config\requirements.txt
-.\config\.venv\Scripts\python.exe .\run\main.py
+.\config\.venv\Scripts\Activate.ps1
+python -m pip install --disable-pip-version-check -r config\requirements.txt
+python .\run\main.py
+deactivate
 ```
 
 如果系统没有 `py`，请用 Python 3.9 或更高版本解释器的完整路径替换 `py -3`。
+`pip install` 命令会把所需依赖下载并安装到 `config/.venv`。
+
+如果 PowerShell 阻止执行 `Activate.ps1`，可以使用第 5 节中不激活环境、直接调用
+解释器的方法；也可以在设备安全策略允许时，仅对当前 PowerShell 进程临时放开脚本
+执行权限，然后再激活环境：
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\config\.venv\Scripts\Activate.ps1
+```
+
+使用 Command Prompt 时，可以通过以下命令激活同一个环境：
+
+```bat
+config\.venv\Scripts\activate.bat
+```
 
 ### macOS Terminal
 
 ```bash
 python3 -m venv config/.venv
-./config/.venv/bin/python -m pip install -r config/requirements.txt
-./config/.venv/bin/python run/main.py
+source config/.venv/bin/activate
+python -m pip install --disable-pip-version-check -r config/requirements.txt
+python run/main.py
+deactivate
 ```
+
+`source` 命令会在当前 Terminal 会话中激活项目私有环境。`pip install` 会把所需依赖
+下载并安装到该环境中。使用完成后运行 `deactivate`。
 
 ## 5. 纯命令运行约定
 
-下面使用 `PYTHON` 代表项目私有环境中的 Python 解释器。
+按照第 4 节激活 `config/.venv` 后，纯命令可以直接使用 `python`：
+
+```text
+python run/main.py check
+```
+
+激活环境不是强制要求。如果没有激活，下面使用 `PYTHON` 代表项目私有环境中的
+Python 解释器。
 
 Windows：
 
