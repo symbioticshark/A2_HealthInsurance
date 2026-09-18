@@ -1,0 +1,3 @@
+# Only needed for `main.py live` (D5b, real OpenRouter calls).
+# Everything else (eval, run, failures, check) is pure standard library.
+requests
