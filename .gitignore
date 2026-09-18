@@ -3,3 +3,8 @@ local_config.py
 __pycache__/
 *.pyc
 .DS_Store
+.run.lock
+.in_progress/
+a2_write_*.tmp
+a2_merge_*.tmp
+a2_restore_*.tmp
