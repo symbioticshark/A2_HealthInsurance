@@ -82,9 +82,12 @@ def _record_calls(result: RunResult, calls, already_called: set):
     return sigs
 
 
+_D7_SCRIPTED_FAULTS = {None, "omit_terminal_ask_exit"}
+
+
 def run_case(claim_id: str, autonomy: str = G.AUTONOMY_SETTING, auto_confirm: bool = True,
              backend: str = None, model: str = None, verbose: bool = False,
-             parallel: bool = True) -> RunResult:
+             parallel: bool = True, d7_fault: str = None) -> RunResult:
     """Runs ONE trial of ONE case, start to finish, from a clean state (D4
     isolation -- nothing here reads any other run's output). Dispatches to
     the scripted or live path based on `backend` (defaults to config.BACKEND).
@@ -96,11 +99,18 @@ def run_case(claim_id: str, autonomy: str = G.AUTONOMY_SETTING, auto_confirm: bo
     "sequential" reading of the same dependency rule, not a different
     agent. See measure_parallel_vs_sequential.py."""
     backend = backend or config.BACKEND
+    if d7_fault not in _D7_SCRIPTED_FAULTS:
+        raise ValueError(f"unknown D7 fault injection: {d7_fault!r}")
+    if d7_fault is not None and backend != "scripted":
+        raise ValueError("D7 fault injection is restricted to the scripted backend")
     t_start = time.perf_counter()
     if backend == "live":
         result = _run_case_live(claim_id, autonomy, auto_confirm, model or config.MODEL, verbose)
     else:
-        result = _run_case_scripted(claim_id, autonomy, auto_confirm, verbose, parallel=parallel)
+        result = _run_case_scripted(
+            claim_id, autonomy, auto_confirm, verbose,
+            parallel=parallel, d7_fault=d7_fault,
+        )
     # Single source of truth for wall clock: the whole run, API latency and
     # tool/guardrail overhead together -- not just the sum of individual
     # API call latencies, which undercounts the loop's own cost.
@@ -112,7 +122,7 @@ def run_case(claim_id: str, autonomy: str = G.AUTONOMY_SETTING, auto_confirm: bo
 # SCRIPTED PATH -- deterministic, no network, D5(a)
 # ===========================================================================
 def _run_case_scripted(claim_id: str, autonomy: str, auto_confirm: bool, verbose: bool,
-                        parallel: bool = True) -> RunResult:
+                        parallel: bool = True, d7_fault: str = None) -> RunResult:
     result = RunResult(case_id=claim_id, autonomy=autonomy, model="scripted", cost_is_measured=False)
     already_called = set()
     turn = 0
@@ -219,6 +229,27 @@ def _run_case_scripted(claim_id: str, autonomy: str, auto_confirm: bool, verbose
         outcome = S.resolve_lines(claim, memory["coverage"], memory["preauth"])
         if outcome[0] == "ask":
             _, missing, resolved_so_far = outcome
+            if d7_fault == "omit_terminal_ask_exit":
+                # D7 Failure 1 is the working scripted loop with exactly one
+                # control transition removed: the terminal `return` below.
+                # The loop now keeps re-reading the already-complete cached
+                # outcome. It makes no duplicate tool call, so dedup cannot
+                # catch this failure; the evidence-based step cap must stop it.
+                result.trace.append(
+                    f"turn {turn}: D7 FAULT -- terminal ask exit omitted; "
+                    f"cached outcome '{missing}' will be re-evaluated"
+                )
+                while True:
+                    turn += 1
+                    G.check_step_cap(turn)
+                    tin, tout = C.estimate_tokens_for_run(turn)
+                    result.tokens_in, result.tokens_out = tin, tout
+                    result.cost_usd = C.price_run(tin, tout, "cheap")
+                    G.check_budget_ceiling(result.cost_usd)
+                    result.trace.append(
+                        f"turn {turn}: re-read cached observations; "
+                        "terminal ask still known but not returned"
+                    )
             result.decision = "request_document"
             result.missing = missing
             result.turns = turn

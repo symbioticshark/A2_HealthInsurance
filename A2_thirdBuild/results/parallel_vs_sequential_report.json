@@ -1,0 +1,42 @@
+{
+  "parallel": {
+    "label": "parallel",
+    "total_runs": 72,
+    "median_turns": 2.5,
+    "max_turns": 4,
+    "total_tokens_in": 278400,
+    "total_tokens_out": 10740,
+    "total_tokens": 289140,
+    "total_cost_usd": 0.032136,
+    "passed": 72,
+    "pass_rate_pct": 100.0,
+    "step_cap_hits": 0
+  },
+  "sequential_fair_comparison": {
+    "label": "sequential_fair",
+    "total_runs": 72,
+    "median_turns": 6.0,
+    "max_turns": 12,
+    "total_tokens_in": 924400,
+    "total_tokens_out": 24240,
+    "total_tokens": 948640,
+    "total_cost_usd": 0.102136,
+    "passed": 72,
+    "pass_rate_pct": 100.0,
+    "step_cap_hits": 0
+  },
+  "sequential_as_shipped": {
+    "label": "sequential_as_shipped",
+    "total_runs": 72,
+    "median_turns": 6.0,
+    "max_turns": 7,
+    "total_tokens_in": 775200,
+    "total_tokens_out": 21960,
+    "total_tokens": 797160,
+    "total_cost_usd": 0.086304,
+    "passed": 52,
+    "pass_rate_pct": 72.2,
+    "step_cap_hits": 20
+  },
+  "correctness_mismatches": []
+}

@@ -193,6 +193,40 @@ $PYTHON run/main.py check
 
 Use the platform-appropriate path separators in the remaining examples.
 
+### Register a tester and enter an API key
+
+After activation, one command can register the tester and open masked API-key
+input:
+
+```text
+PYTHON run/main.py setup --name "Tester Name" --api-key
+```
+
+`--api-key` intentionally does not accept the key as a command-line value. The
+key is entered at the following prompt and displayed as `*`, keeping it out of
+shell history and process arguments.
+
+If the name maps to an existing `results/<tester>/` directory, setup prints a
+warning and changes nothing. Reuse that history only when intentional:
+
+```text
+PYTHON run/main.py setup --name "Tester Name" --api-key --allow-existing-tester
+```
+
+When an evaluation or another normal command starts without a configured
+tester name, the program assigns a unique name such as
+`tester_20260919_203314_1a5e1b` and continues. Interactive first launch also
+allows pressing Enter to request an automatic name.
+
+API-key priority is:
+
+1. `OPENROUTER_API_KEY` environment variable;
+2. key entered for the current process;
+3. key saved in the gitignored `config/local_config.py`.
+
+If an environment key exists, entering a different local key saves it as a
+fallback but does not override the environment variable.
+
 ## 6. Environment check
 
 ```text
@@ -261,11 +295,36 @@ interface:
 PYTHON agent/guardrail_checklist.py --tool-interface v1
 ```
 
-### Run the failure demonstrations
+### Run the D7 reproduced failures
+
+D7 uses the scripted backend only. It does not need an API key and does not
+spend OpenRouter credit. Each experiment runs the same working agent before
+and after one controlled deletion, prints the complete traces and comparison,
+and atomically saves a detailed JSON report.
+
+Run the required loop-control failure only:
 
 ```text
-PYTHON run/main.py failures --case-id CLM-8888
+PYTHON run/run_d7_failures.py --failure 1
 ```
+
+Run the tool-interface failure only:
+
+```text
+PYTHON run/run_d7_failures.py --failure 2
+```
+
+Run both and generate the combined report:
+
+```text
+PYTHON run/run_d7_failures.py --failure all
+```
+
+The D7 runner does not append to tester run history or the normal decision
+ledger. Its isolated fixture is removed from memory after the experiment, and
+the original tool-interface selection is restored. See
+`doc/D7_REPRODUCED_FAILURES.md` for the method, code locations, layer analysis,
+and measured before/after tables.
 
 ### Run the parallel-versus-sequential D2(c) experiment
 
@@ -438,6 +497,18 @@ decision_ledger.jsonl   one actual decision action per line
 Latest-result JSON files and comparison JSON files are derived views. Existing
 2.5 result files remain readable without conversion.
 
+D7 has a separate derived-results directory:
+
+```text
+results/d7/failure_1_loop_control.json
+results/d7/failure_2_tool_interface.json
+results/d7/d7_summary.json
+```
+
+The individual files are atomically overwritten when their experiment is run.
+`d7_summary.json` is regenerated only by `--failure all`. These files are not
+tester sessions and do not alter the three append-only historical sources.
+
 ## 11. Safe interruption and concurrency
 
 - Press `Ctrl+C` during an evaluation to cancel it. An incomplete session is
@@ -476,6 +547,7 @@ Show options for a particular command:
 PYTHON run/main.py eval --help
 PYTHON run/main.py live --help
 PYTHON run/main.py view-result --help
+PYTHON run/run_d7_failures.py --help
 ```
 
 When in doubt, use the launcher script and the interactive menu. It provides

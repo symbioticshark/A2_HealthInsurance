@@ -1,0 +1,168 @@
+{
+  "schema_version": "1.0",
+  "generated_at_utc": "2026-09-19T12:04:13.770684+00:00",
+  "failure_id": "D7-F2",
+  "title": "Tool interface: unfiltered cross-member claim history",
+  "controlled_layer": "tool interface",
+  "case_id": "D7-HISTORY-001",
+  "backend": "scripted",
+  "expected_decision": "approve_in_principle",
+  "single_deleted_element": "V2 member filtering and bounded minimal return shape; V1 is the working tool without that shaping.",
+  "failure_mechanism": "V1 exposes another member's superficially identical decided claim. The downstream exact-match helper relies on the tool's member-scoped contract and therefore misclassifies the new claim as a duplicate.",
+  "actual_fix": "Restore the V2 member filter and bounded five-record minimal response.",
+  "why_other_layers_are_wrong": {
+    "prompt": "A prompt reminder cannot enforce data minimisation or prevent cross-member disclosure.",
+    "loop_control": "The loop terminates normally; the observation itself is wrong for the requested member.",
+    "guardrail": "Blocking the resulting escalation would hide bad evidence rather than correct its source."
+  },
+  "history_observation": {
+    "v1_records_returned": 5,
+    "v2_records_returned": 1,
+    "v1_approx_tokens": 275,
+    "v2_approx_tokens": 60,
+    "token_reduction_pct": 78.18
+  },
+  "before": {
+    "case_id": "D7-HISTORY-001",
+    "decision": "escalate",
+    "trigger": "duplicate_claim",
+    "missing": null,
+    "dispositions": [],
+    "approved_total": 0,
+    "refused_total": 0,
+    "evidence": [
+      "get_claim",
+      "lookup_policy",
+      "get_hospital_status",
+      "get_claim_history",
+      "check_coverage"
+    ],
+    "autonomy": "confirm",
+    "gate": null,
+    "gate_confirmed": null,
+    "turns": 2,
+    "tokens_in": 2800,
+    "tokens_out": 120,
+    "cached_input_tokens": 0,
+    "cache_write_tokens": 0,
+    "reasoning_tokens": 0,
+    "cost_usd": 0.000328,
+    "cost_is_measured": false,
+    "cost_source": "estimated",
+    "model": "scripted",
+    "wall_clock_seconds": 0.0001,
+    "guardrail_stop": null,
+    "ledger_line": null,
+    "trace": [
+      "turn 1: get_claim -> 1 line(s)",
+      "turn 2: policy/hospital/history/coverage lookups (parallel batch) -- ['lookup_policy', 'get_hospital_status', 'get_claim_history', 'check_coverage']",
+      "turn 2: policy-level verdict -- duplicate_claim: CLM-8702 was already decided (approve_in_principle) for the same member, hospital, date of service and lines."
+    ]
+  },
+  "after": {
+    "case_id": "D7-HISTORY-001",
+    "decision": "approve_in_principle",
+    "trigger": null,
+    "missing": null,
+    "dispositions": [
+      {
+        "code": "99213",
+        "amount": 180,
+        "status": "covered"
+      }
+    ],
+    "approved_total": 180,
+    "refused_total": 0,
+    "evidence": [
+      "get_claim",
+      "lookup_policy",
+      "get_hospital_status",
+      "get_claim_history",
+      "check_coverage",
+      "issue_decision_letter"
+    ],
+    "autonomy": "confirm",
+    "gate": "operator approved",
+    "gate_confirmed": true,
+    "turns": 3,
+    "tokens_in": 4800,
+    "tokens_out": 180,
+    "cached_input_tokens": 0,
+    "cache_write_tokens": 0,
+    "reasoning_tokens": 0,
+    "cost_usd": 0.000552,
+    "cost_is_measured": false,
+    "cost_source": "estimated",
+    "model": "scripted",
+    "wall_clock_seconds": 0.0005,
+    "guardrail_stop": null,
+    "ledger_line": {
+      "ts": "2026-09-19T12:04:13.769684",
+      "case_id": "D7-HISTORY-001",
+      "decision": "approve_in_principle",
+      "reason": "Policy POL-3310 status active. Hospital on panel. 1 of 1 lines payable; 0 excluded. Approved total 180 against 9200 remaining.",
+      "evidence": [
+        "get_claim",
+        "lookup_policy",
+        "get_hospital_status",
+        "get_claim_history",
+        "check_coverage",
+        "issue_decision_letter"
+      ],
+      "autonomy": "confirm",
+      "gate": "operator approved",
+      "lines": [
+        {
+          "code": "99213",
+          "amount": 180,
+          "status": "covered"
+        }
+      ],
+      "approved_total": 180,
+      "refused_total": 0
+    },
+    "trace": [
+      "turn 1: get_claim -> 1 line(s)",
+      "turn 2: policy/hospital/history/coverage lookups (parallel batch) -- ['lookup_policy', 'get_hospital_status', 'get_claim_history', 'check_coverage']",
+      "turn 3: gate cleared, decision letter recorded"
+    ]
+  },
+  "comparison": {
+    "decision": {
+      "before": "escalate",
+      "after": "approve_in_principle"
+    },
+    "trigger": {
+      "before": "duplicate_claim",
+      "after": null
+    },
+    "pass_rate_pct": {
+      "before": 0.0,
+      "after": 100.0
+    },
+    "turns": {
+      "before": 2,
+      "after": 3
+    },
+    "tokens_in": {
+      "before": 2800,
+      "after": 4800
+    },
+    "tokens_out": {
+      "before": 120,
+      "after": 180
+    },
+    "estimated_cost_usd": {
+      "before": 0.000328,
+      "after": 0.000552
+    },
+    "guardrail_stop": {
+      "before": null,
+      "after": null
+    }
+  },
+  "success_criteria": {
+    "failure_reproduced": true,
+    "working_behaviour_recovered": true
+  }
+}

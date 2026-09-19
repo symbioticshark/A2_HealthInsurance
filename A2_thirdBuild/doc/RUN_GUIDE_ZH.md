@@ -182,6 +182,37 @@ $PYTHON run/main.py check
 
 以下示例请根据所用平台选择对应的路径分隔符。
 
+### 注册 tester 并输入 API key
+
+激活环境后，可以使用一条命令注册 tester，并进入掩码 API key 输入：
+
+```text
+PYTHON run/main.py setup --name "Tester Name" --api-key
+```
+
+`--api-key` 不接受直接跟在命令后的明文 key。程序会在下一步提示中读取 key，并用
+`*` 显示，从而避免 key 出现在 shell 历史和进程参数中。
+
+如果该姓名已经对应一个 `results/<tester>/` 目录，setup 会显示重名警告并保持配置
+不变。只有确认要复用该测试者历史时，才应运行：
+
+```text
+PYTHON run/main.py setup --name "Tester Name" --api-key --allow-existing-tester
+```
+
+如果执行 evaluation 或其他普通命令时仍未配置 tester 名，系统会分配类似
+`tester_20260919_203314_1a5e1b` 的唯一名称并继续。首次进入交互菜单时，也可以直接
+按 Enter 请求自动名称。
+
+API key 读取优先级为：
+
+1. `OPENROUTER_API_KEY` 环境变量；
+2. 当前进程中刚输入的 key；
+3. 保存在 Git 忽略文件 `config/local_config.py` 中的 key。
+
+如果环境变量中已经有 key，输入不同的本地 key 只会将其保存为备用值，不会覆盖
+环境变量的最高优先级。
+
 ## 6. 环境检查
 
 ```text
@@ -247,11 +278,33 @@ PYTHON agent/guardrail_checklist.py --tool-interface v2
 PYTHON agent/guardrail_checklist.py --tool-interface v1
 ```
 
-### 运行失败演示
+### 运行 D7 可复现故障实验
+
+D7 只使用 scripted backend，不需要 API key，也不会消耗 OpenRouter 余额。每个实验
+都使用同一个正式 agent，对单个机制进行受控删除，分别运行修复前和修复后版本；终端
+会显示完整执行轨迹、指标对比和验证结果，并通过原子写入保存详细 JSON 报告。
+
+只运行必做的循环控制故障：
 
 ```text
-PYTHON run/main.py failures --case-id CLM-8888
+PYTHON run/run_d7_failures.py --failure 1
 ```
+
+只运行工具接口故障：
+
+```text
+PYTHON run/run_d7_failures.py --failure 2
+```
+
+运行两个故障并生成合并报告：
+
+```text
+PYTHON run/run_d7_failures.py --failure all
+```
+
+D7 runner 不会追加 tester 的运行历史，也不会写入正式 decision ledger。隔离 fixture
+会在实验结束后从内存移除，原来的工具接口选择也会恢复。完整测试方法、代码位置、
+控制层级和修复前后数据见 `doc/D7_REPRODUCED_FAILURES.md`。
 
 ### 运行 parallel 与 sequential 的 D2(c) 实验
 
@@ -418,6 +471,17 @@ decision_ledger.jsonl   每行代表一次实际决策动作
 
 最近一次结果 JSON 和各类比较 JSON 都是派生视图。现有 2.5 结果无需转换即可继续读取。
 
+D7 使用独立的派生结果目录：
+
+```text
+results/d7/failure_1_loop_control.json
+results/d7/failure_2_tool_interface.json
+results/d7/d7_summary.json
+```
+
+运行单个实验时，只会原子覆盖对应的结果文件。只有 `--failure all` 才会重新生成
+`d7_summary.json`。这些文件不是 tester Session，不会改变三个 append-only 历史数据源。
+
 ## 11. 安全中断和并发
 
 - 在评估过程中按 `Ctrl+C` 可以取消运行。未完成的 Session 会回滚，而不会被发布为
@@ -450,6 +514,7 @@ PYTHON run/main.py --help
 PYTHON run/main.py eval --help
 PYTHON run/main.py live --help
 PYTHON run/main.py view-result --help
+PYTHON run/run_d7_failures.py --help
 ```
 
 如果不确定应该使用哪个命令，请使用启动脚本和交互式菜单。它们提供最安全的环境

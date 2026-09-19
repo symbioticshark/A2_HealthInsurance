@@ -31,8 +31,8 @@ def configure_api_key(force=False):
         if environment_key and environment_key != key:
             print(
                 "Note: a different OPENROUTER_API_KEY environment variable is set. "
-                "This program will use the new key now, but update or remove the environment "
-                "variable before a later launch."
+                "The environment variable has priority and remains active. The entered key "
+                "was saved as the fallback used after that variable is updated or removed."
             )
         return True
 

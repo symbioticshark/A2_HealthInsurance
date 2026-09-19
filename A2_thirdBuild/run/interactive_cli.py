@@ -4,9 +4,11 @@
 All prompts, menus and terminal rendering live here rather than in main.py.
 """
 import argparse
+import datetime as dt
 import json
 import os
 import sys
+import uuid
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
@@ -42,6 +44,36 @@ def _configure_user_results(name=None):
     return directory
 
 
+def _generate_unique_tester_name():
+    """Return a readable tester name whose result directory does not exist."""
+    timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    while True:
+        candidate = f"tester_{timestamp}_{uuid.uuid4().hex[:6]}"
+        if not os.path.exists(_user_results_dir(candidate)):
+            return candidate
+
+
+def _tester_name_conflict(name):
+    """True when registration would adopt another existing tester directory."""
+    current = str(local_settings.get_local_config_value("name", "") or "").strip()
+    requested_slug = metrics.safe_filename(name)
+    current_slug = metrics.safe_filename(current) if current else None
+    return os.path.isdir(_user_results_dir(name)) and requested_slug != current_slug
+
+
+def _register_tester(name, allow_existing=False):
+    """Save a tester name unless it would silently reuse another history."""
+    normalized = str(name or "").strip()
+    if not normalized:
+        normalized = _generate_unique_tester_name()
+    conflict_path = _user_results_dir(normalized)
+    if _tester_name_conflict(normalized) and not allow_existing:
+        return False, normalized, conflict_path
+    _save_config({"name": normalized})
+    _configure_user_results(normalized)
+    return True, normalized, conflict_path
+
+
 def _prompt_choice(prompt, valid):
     valid = {str(item).upper() for item in valid}
     while True:
@@ -69,20 +101,36 @@ def _save_config(updates):
     local_settings.save_local_config(updates)
 
 
-def _ensure_profile():
+def _ensure_profile(interactive=True):
     current = local_settings.load_local_config()
     first_launch = not local_settings.has_user_config()
     updates = {}
     if not current.get("name"):
-        while True:
-            name = input("Tester name: ").strip()
-            if name:
-                updates["name"] = name
+        if interactive:
+            while True:
+                requested = input(
+                    "Tester name (press Enter for an automatic unique name): "
+                ).strip()
+                if not requested:
+                    name = _generate_unique_tester_name()
+                    print(f"Assigned unique tester name: {name}")
+                    updates["name"] = name
+                    break
+                if _tester_name_conflict(requested):
+                    path = _user_results_dir(requested)
+                    print(f"Warning: tester '{requested}' already has a result directory:")
+                    print(f"  {path}")
+                    if _prompt_choice("Reuse this tester history? Y/N: ", {"Y", "N"}) == "N":
+                        continue
+                updates["name"] = requested
                 break
-            print("Tester name cannot be empty.")
+        else:
+            name = _generate_unique_tester_name()
+            updates["name"] = name
+            print(f"No tester name was configured. Assigned unique tester name: {name}")
     if not current.get("default_model"):
         updates["default_model"] = config.MODEL
-    if first_launch:
+    if first_launch and interactive:
         print("\nFirst launch: create a local tester profile. The API key is optional.")
         api_key = masked_input("OpenRouter API key (press Enter to skip): ").strip()
         if api_key:
@@ -90,6 +138,8 @@ def _ensure_profile():
             live_backend.set_runtime_api_key(api_key)
         else:
             print("No API key saved. Scripted evaluation and guardrail tests remain available.")
+    elif first_launch:
+        print("No API key was requested. Scripted runs remain available; live runs will request one when needed.")
     if updates:
         _save_config(updates)
     name = local_settings.get_local_config_value("name", "anonymous")
@@ -97,9 +147,36 @@ def _ensure_profile():
     interface_version = local_settings.get_local_config_value("tool_interface_version", "v2")
     try:
         tools.configure_tool_interface(interface_version)
-    except ValueError:
+    except ValueError as e:
+        print(f"Warning: Invalid tool interface '{interface_version}', using v2 instead.")
         tools.configure_tool_interface("v2")
     return name
+
+
+def cmd_setup(args):
+    """Register a tester and optionally collect an API key with masked input."""
+    ok, name, path = _register_tester(
+        args.name, allow_existing=args.allow_existing_tester,
+    )
+    if not ok:
+        print(f"Warning: tester '{name}' already has a result directory:")
+        print(f"  {path}")
+        print("No configuration was changed. Use --allow-existing-tester only if you intend to share that history.")
+        return 2
+
+    print(f"Tester registered: {name}")
+    print(f"Result directory : {path}")
+    if args.api_key:
+        if not _configure_api_key(force=True):
+            print("API-key entry cancelled. The tester registration was kept.")
+            return 1
+    key, source = live_backend.get_api_key_with_source()
+    print(f"API key source   : {source}")
+    if not key:
+        print("No API key is active. Scripted runs remain available.")
+    elif source == "environment variable":
+        print("OPENROUTER_API_KEY has priority over current-session and local keys.")
+    return 0
 
 
 def _configure_api_key(force=False):
@@ -196,7 +273,9 @@ def _select_model():
             print(f"Updated prices for {refreshed} listed model(s) from OpenRouter.")
         models = _history_models()
     except Exception as exc:
-        print(f"OpenRouter model catalog unavailable; using saved prices. ({exc})")
+        safe_error = live_backend.sanitize_error_text(str(exc))
+        print(f"OpenRouter model catalog unavailable; using saved prices.")
+        print(f"Reason: {safe_error}")
     default_model = local_settings.get_local_config_value("default_model", config.MODEL)
     print("\nAvailable models:")
     for index, model in enumerate(models, 1):
@@ -659,8 +738,12 @@ def _configuration_menu():
         if choice == "1":
             name = input("Tester name: ").strip()
             if name:
-                _save_config({"name": name})
-                _configure_user_results(name)
+                ok, registered, path = _register_tester(name)
+                if not ok:
+                    print(f"Warning: tester '{registered}' already has a result directory:")
+                    print(f"  {path}")
+                    if _prompt_choice("Reuse this tester history? Y/N: ", {"Y", "N"}) == "Y":
+                        _register_tester(registered, allow_existing=True)
         elif choice == "2":
             if _configure_api_key(force=True):
                 _check_api_interactive(allow_replace=True)
@@ -884,12 +967,25 @@ def build_parser():
     v1_v2_parser.set_defaults(func=cmd_compare_v1_v2)
     check_parser = sub.add_parser("check")
     check_parser.set_defaults(func=cmd_check)
+    setup_parser = sub.add_parser(
+        "setup", help="register a tester and optionally enter an API key safely",
+    )
+    setup_parser.add_argument("--name", required=True, help="tester name")
+    setup_parser.add_argument(
+        "--api-key", action="store_true",
+        help="prompt for an API key using masked input; literal keys are not accepted",
+    )
+    setup_parser.add_argument(
+        "--allow-existing-tester", action="store_true",
+        help="deliberately reuse an existing tester result directory",
+    )
+    setup_parser.set_defaults(func=cmd_setup)
     return parser
 
 
-def prepare_runtime():
+def prepare_runtime(interactive=False):
     """Load the tester profile and configure tester-scoped result paths."""
-    return _ensure_profile()
+    return _ensure_profile(interactive=interactive)
 
 
 def run():

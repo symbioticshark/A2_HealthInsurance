@@ -1,0 +1,335 @@
+{
+  "schema_version": "1.0",
+  "purpose": "D7 two deterministic reproduced failures",
+  "experiments": [
+    {
+      "schema_version": "1.0",
+      "generated_at_utc": "2026-09-19T12:04:13.765685+00:00",
+      "failure_id": "D7-F1",
+      "title": "Loop control: omitted terminal ask exit",
+      "controlled_layer": "code / loop control",
+      "case_id": "CLM-8888",
+      "backend": "scripted",
+      "expected_decision": "request_document",
+      "single_deleted_element": "The terminal return after resolve_lines produces a complete ask outcome.",
+      "failure_mechanism": "The agent keeps re-reading a complete cached outcome and never returns it. No duplicate tool action occurs, so action de-duplication cannot detect this shape.",
+      "actual_catcher": "step cap",
+      "working_agent_turn_distribution": {
+        "case_count": 40,
+        "median_turns": 3.0,
+        "worst_turns": 4,
+        "worst_case_ids": [
+          "CLM-8842",
+          "CLM-8861",
+          "CLM-9005",
+          "CLM-9007",
+          "CLM-9009",
+          "CLM-9011",
+          "CLM-9015",
+          "CLM-9016"
+        ],
+        "step_cap_hits": 0,
+        "passing_cases": 40,
+        "pass_rate_pct": 100.0
+      },
+      "why_other_controls_do_not_fix_root_cause": {
+        "action_deduplication": "No tool is called twice; the loop re-reads cached state.",
+        "budget_ceiling": "It is a later financial backstop, not the earliest control for this trajectory.",
+        "prompt": "The scripted failure is a missing code transition, not a model-instruction problem.",
+        "tool_interface": "All required observations are already correct and complete."
+      },
+      "before": {
+        "case_id": "CLM-8888",
+        "decision": "escalate",
+        "trigger": "step_cap_hit",
+        "missing": null,
+        "dispositions": [],
+        "approved_total": 0,
+        "refused_total": 0,
+        "evidence": [
+          "get_claim",
+          "lookup_policy",
+          "get_hospital_status",
+          "get_claim_history",
+          "check_coverage",
+          "check_coverage",
+          "check_coverage",
+          "get_preauthorisation"
+        ],
+        "autonomy": "confirm",
+        "gate": null,
+        "gate_confirmed": null,
+        "turns": 7,
+        "tokens_in": 13200,
+        "tokens_out": 360,
+        "cached_input_tokens": 0,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 0,
+        "cost_usd": 0.001464,
+        "cost_is_measured": false,
+        "cost_source": "estimated",
+        "model": "scripted",
+        "wall_clock_seconds": 0.0001,
+        "guardrail_stop": "step_cap_hit",
+        "ledger_line": null,
+        "trace": [
+          "turn 1: get_claim -> 3 line(s)",
+          "turn 2: policy/hospital/history/coverage lookups (parallel batch) -- ['lookup_policy', 'get_hospital_status', 'get_claim_history', 'check_coverage', 'check_coverage', 'check_coverage']",
+          "turn 3: pre-authorisation chase (parallel batch) -- ['get_preauthorisation']",
+          "turn 3: D7 FAULT -- terminal ask exit omitted; cached outcome 'pre-authorisation reference for line 62480, valid on 2026-09-08' will be re-evaluated",
+          "turn 4: re-read cached observations; terminal ask still known but not returned",
+          "turn 5: re-read cached observations; terminal ask still known but not returned",
+          "turn 6: re-read cached observations; terminal ask still known but not returned",
+          "turn 7: GUARDRAIL STOP -- step_cap_hit: turn 7 exceeds cap of 6"
+        ]
+      },
+      "after": {
+        "case_id": "CLM-8888",
+        "decision": "request_document",
+        "trigger": null,
+        "missing": "pre-authorisation reference for line 62480, valid on 2026-09-08",
+        "dispositions": [],
+        "approved_total": 0,
+        "refused_total": 0,
+        "evidence": [
+          "get_claim",
+          "lookup_policy",
+          "get_hospital_status",
+          "get_claim_history",
+          "check_coverage",
+          "check_coverage",
+          "check_coverage",
+          "get_preauthorisation"
+        ],
+        "autonomy": "confirm",
+        "gate": null,
+        "gate_confirmed": null,
+        "turns": 3,
+        "tokens_in": 4800,
+        "tokens_out": 180,
+        "cached_input_tokens": 0,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 0,
+        "cost_usd": 0.000552,
+        "cost_is_measured": false,
+        "cost_source": "estimated",
+        "model": "scripted",
+        "wall_clock_seconds": 0.0001,
+        "guardrail_stop": null,
+        "ledger_line": null,
+        "trace": [
+          "turn 1: get_claim -> 3 line(s)",
+          "turn 2: policy/hospital/history/coverage lookups (parallel batch) -- ['lookup_policy', 'get_hospital_status', 'get_claim_history', 'check_coverage', 'check_coverage', 'check_coverage']",
+          "turn 3: pre-authorisation chase (parallel batch) -- ['get_preauthorisation']",
+          "turn 3: stopped on an ask -- pre-authorisation reference for line 62480, valid on 2026-09-08"
+        ]
+      },
+      "comparison": {
+        "decision": {
+          "before": "escalate",
+          "after": "request_document"
+        },
+        "trigger": {
+          "before": "step_cap_hit",
+          "after": null
+        },
+        "pass_rate_pct": {
+          "before": 0.0,
+          "after": 100.0
+        },
+        "turns": {
+          "before": 7,
+          "after": 3
+        },
+        "tokens_in": {
+          "before": 13200,
+          "after": 4800
+        },
+        "tokens_out": {
+          "before": 360,
+          "after": 180
+        },
+        "estimated_cost_usd": {
+          "before": 0.001464,
+          "after": 0.000552
+        },
+        "guardrail_stop": {
+          "before": "step_cap_hit",
+          "after": null
+        }
+      },
+      "success_criteria": {
+        "failure_reproduced": true,
+        "working_behaviour_recovered": true
+      }
+    },
+    {
+      "schema_version": "1.0",
+      "generated_at_utc": "2026-09-19T12:04:13.770684+00:00",
+      "failure_id": "D7-F2",
+      "title": "Tool interface: unfiltered cross-member claim history",
+      "controlled_layer": "tool interface",
+      "case_id": "D7-HISTORY-001",
+      "backend": "scripted",
+      "expected_decision": "approve_in_principle",
+      "single_deleted_element": "V2 member filtering and bounded minimal return shape; V1 is the working tool without that shaping.",
+      "failure_mechanism": "V1 exposes another member's superficially identical decided claim. The downstream exact-match helper relies on the tool's member-scoped contract and therefore misclassifies the new claim as a duplicate.",
+      "actual_fix": "Restore the V2 member filter and bounded five-record minimal response.",
+      "why_other_layers_are_wrong": {
+        "prompt": "A prompt reminder cannot enforce data minimisation or prevent cross-member disclosure.",
+        "loop_control": "The loop terminates normally; the observation itself is wrong for the requested member.",
+        "guardrail": "Blocking the resulting escalation would hide bad evidence rather than correct its source."
+      },
+      "history_observation": {
+        "v1_records_returned": 5,
+        "v2_records_returned": 1,
+        "v1_approx_tokens": 275,
+        "v2_approx_tokens": 60,
+        "token_reduction_pct": 78.18
+      },
+      "before": {
+        "case_id": "D7-HISTORY-001",
+        "decision": "escalate",
+        "trigger": "duplicate_claim",
+        "missing": null,
+        "dispositions": [],
+        "approved_total": 0,
+        "refused_total": 0,
+        "evidence": [
+          "get_claim",
+          "lookup_policy",
+          "get_hospital_status",
+          "get_claim_history",
+          "check_coverage"
+        ],
+        "autonomy": "confirm",
+        "gate": null,
+        "gate_confirmed": null,
+        "turns": 2,
+        "tokens_in": 2800,
+        "tokens_out": 120,
+        "cached_input_tokens": 0,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 0,
+        "cost_usd": 0.000328,
+        "cost_is_measured": false,
+        "cost_source": "estimated",
+        "model": "scripted",
+        "wall_clock_seconds": 0.0001,
+        "guardrail_stop": null,
+        "ledger_line": null,
+        "trace": [
+          "turn 1: get_claim -> 1 line(s)",
+          "turn 2: policy/hospital/history/coverage lookups (parallel batch) -- ['lookup_policy', 'get_hospital_status', 'get_claim_history', 'check_coverage']",
+          "turn 2: policy-level verdict -- duplicate_claim: CLM-8702 was already decided (approve_in_principle) for the same member, hospital, date of service and lines."
+        ]
+      },
+      "after": {
+        "case_id": "D7-HISTORY-001",
+        "decision": "approve_in_principle",
+        "trigger": null,
+        "missing": null,
+        "dispositions": [
+          {
+            "code": "99213",
+            "amount": 180,
+            "status": "covered"
+          }
+        ],
+        "approved_total": 180,
+        "refused_total": 0,
+        "evidence": [
+          "get_claim",
+          "lookup_policy",
+          "get_hospital_status",
+          "get_claim_history",
+          "check_coverage",
+          "issue_decision_letter"
+        ],
+        "autonomy": "confirm",
+        "gate": "operator approved",
+        "gate_confirmed": true,
+        "turns": 3,
+        "tokens_in": 4800,
+        "tokens_out": 180,
+        "cached_input_tokens": 0,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 0,
+        "cost_usd": 0.000552,
+        "cost_is_measured": false,
+        "cost_source": "estimated",
+        "model": "scripted",
+        "wall_clock_seconds": 0.0005,
+        "guardrail_stop": null,
+        "ledger_line": {
+          "ts": "2026-09-19T12:04:13.769684",
+          "case_id": "D7-HISTORY-001",
+          "decision": "approve_in_principle",
+          "reason": "Policy POL-3310 status active. Hospital on panel. 1 of 1 lines payable; 0 excluded. Approved total 180 against 9200 remaining.",
+          "evidence": [
+            "get_claim",
+            "lookup_policy",
+            "get_hospital_status",
+            "get_claim_history",
+            "check_coverage",
+            "issue_decision_letter"
+          ],
+          "autonomy": "confirm",
+          "gate": "operator approved",
+          "lines": [
+            {
+              "code": "99213",
+              "amount": 180,
+              "status": "covered"
+            }
+          ],
+          "approved_total": 180,
+          "refused_total": 0
+        },
+        "trace": [
+          "turn 1: get_claim -> 1 line(s)",
+          "turn 2: policy/hospital/history/coverage lookups (parallel batch) -- ['lookup_policy', 'get_hospital_status', 'get_claim_history', 'check_coverage']",
+          "turn 3: gate cleared, decision letter recorded"
+        ]
+      },
+      "comparison": {
+        "decision": {
+          "before": "escalate",
+          "after": "approve_in_principle"
+        },
+        "trigger": {
+          "before": "duplicate_claim",
+          "after": null
+        },
+        "pass_rate_pct": {
+          "before": 0.0,
+          "after": 100.0
+        },
+        "turns": {
+          "before": 2,
+          "after": 3
+        },
+        "tokens_in": {
+          "before": 2800,
+          "after": 4800
+        },
+        "tokens_out": {
+          "before": 120,
+          "after": 180
+        },
+        "estimated_cost_usd": {
+          "before": 0.000328,
+          "after": 0.000552
+        },
+        "guardrail_stop": {
+          "before": null,
+          "after": null
+        }
+      },
+      "success_criteria": {
+        "failure_reproduced": true,
+        "working_behaviour_recovered": true
+      }
+    }
+  ]
+}

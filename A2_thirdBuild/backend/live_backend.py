@@ -4,7 +4,8 @@ vendor exists. loop.py never imports `requests` or knows the word
 "OpenRouter" -- it calls call_model(messages) and gets back (text, usage).
 
 API key resolution order: OPENROUTER_API_KEY environment variable first,
-then config/local_config.py (OPENROUTER_API_KEY = "...").
+then a key entered for the current process, then config/local_config.py
+(OPENROUTER_API_KEY = "...").
 Never commit a real key to a tracked file -- section 4 of the brief
 requires this repo to be public.
 
@@ -31,11 +32,11 @@ def set_runtime_api_key(value: str = ""):
 
 
 def get_api_key_with_source():
-    if _RUNTIME_API_KEY:
-        return _RUNTIME_API_KEY, "current session"
     environment_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     if environment_key:
         return environment_key, "environment variable"
+    if _RUNTIME_API_KEY:
+        return _RUNTIME_API_KEY, "current session"
     local_key = local_settings.get_local_config_value("OPENROUTER_API_KEY", "") or ""
     return local_key.strip(), "local configuration" if local_key.strip() else "not configured"
 

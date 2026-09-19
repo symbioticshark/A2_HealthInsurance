@@ -8,5 +8,6 @@ def run(argv):
     args = parser.parse_args(argv)
     if not args.command:
         return interactive_cli.run()
-    interactive_cli.prepare_runtime()
+    if args.command != "setup":
+        interactive_cli.prepare_runtime(interactive=False)
     return args.func(args)

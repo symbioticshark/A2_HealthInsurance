@@ -1,0 +1,19 @@
+[
+  {
+    "claim_id": "D7-HISTORY-001",
+    "member_id": "M-2214",
+    "hospital_id": "H-207",
+    "date_of_service": "2026-09-02",
+    "narrative": "Routine outpatient consultation submitted for assessment.",
+    "documents": [
+      "itemised_bill"
+    ],
+    "lines": [
+      {
+        "code": "99213",
+        "amount": 180
+      }
+    ],
+    "d7_note": "Matches another member's decided claim on hospital, date and lines. V1 exposes that unrelated record; V2 filters it out."
+  }
+]

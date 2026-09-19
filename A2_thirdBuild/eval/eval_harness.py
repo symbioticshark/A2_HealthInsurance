@@ -21,8 +21,16 @@ LABELS_PATH = os.path.join(PROJECT_ROOT, "data", "expected_outcomes_A.json")
 
 
 def load_labels():
-    with open(LABELS_PATH, encoding="utf-8") as handle:
-        return {item["case_id"]: item for item in json.load(handle)}
+    if not os.path.exists(LABELS_PATH):
+        print(f"ERROR: Expected outcomes file not found: {LABELS_PATH}")
+        print("Please ensure the data directory is complete.")
+        sys.exit(1)
+    try:
+        with open(LABELS_PATH, encoding="utf-8") as handle:
+            return {item["case_id"]: item for item in json.load(handle)}
+    except json.JSONDecodeError as e:
+        print(f"ERROR: Invalid JSON in labels file: {e}")
+        sys.exit(1)
 
 
 def expected_negative_case_ids(labels=None):
